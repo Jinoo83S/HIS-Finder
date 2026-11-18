@@ -2,7 +2,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/fireba
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
 import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
-// Uses the existing HIS Firebase project for staff sign-in and role verification.
+// Uses the existing HIS Firebase project for school-domain sign-in.
 const firebaseConfig = {
   apiKey: "AIzaSyBeSyJY2pET002knu7KWKuqV-Nkhy7OEHQ",
   authDomain: "his-main.firebaseapp.com",
@@ -11,7 +11,7 @@ const firebaseConfig = {
   messagingSenderId: "311279275648",
   appId: "1:311279275648:web:3609db730ec2b0e77ea065"
 };
-const API_BASE = "/api/student-finder";
+const API_BASE = "https://asia-northeast3-his-main.cloudfunctions.net/studentFinderApi";
 const ALLOWED_DOMAIN = "his.sc.kr";
 
 const auth = getAuth(initializeApp(firebaseConfig));
@@ -29,9 +29,9 @@ const searchInput = document.querySelector("#search-input");
 
 document.querySelector("#login-button").addEventListener("click", async (event) => {
   event.currentTarget.disabled = true;
-  gateMessage.textContent = "로그인 중입니다…";
+  gateMessage.textContent = "�α��� ���Դϴ١�";
   try { await signInWithPopup(auth, provider); }
-  catch (error) { gateMessage.textContent = "로그인할 수 없습니다. 학교 계정을 확인해 주세요."; console.error(error); }
+  catch (error) { gateMessage.textContent = "�α����� �� �����ϴ�. �б� ������ Ȯ���� �ּ���."; console.error(error); }
   finally { event.currentTarget.disabled = false; }
 });
 document.querySelector("#logout-button").addEventListener("click", () => signOut(auth));
@@ -45,25 +45,23 @@ onAuthStateChanged(auth, async (user) => {
   }
   if (!user.email || user.email.toLowerCase().split("@").pop() !== ALLOWED_DOMAIN) {
     await signOut(auth);
-    gateMessage.textContent = "@his.sc.kr 학교 계정으로 로그인해 주세요.";
+    gateMessage.textContent = "@his.sc.kr �б� �������� �α����� �ּ���.";
     return;
   }
   try {
+    // All verified HIS-domain accounts may use student lookup.
+    // Admin-only controls remain gated by the existing Firebase staff role.
     const staff = await getDoc(doc(db, "staff", user.email));
     const role = staff.exists() ? staff.data().role : null;
-    if (!staff.exists() || !["teacher", "staff", "admin"].includes(role)) {
-      await signOut(auth);
-      gateMessage.textContent = "등록된 교직원 계정만 사용할 수 있습니다.";
-      return;
-    }
     gate.hidden = true;
     appShell.hidden = false;
     document.querySelector("#account-email").textContent = user.email;
-    setNotice("교직원 인증을 마쳤습니다. 학생 검색 API를 연결하면 검색을 시작할 수 있습니다.", "info");
+    document.querySelector("#admin-link").hidden = role !== "admin";
+    setNotice("�б� �������� �α����߽��ϴ�. �л� ������ API�� �����ϸ� �˻��� ������ �� �ֽ��ϴ�.", "info");
   } catch (error) {
     console.error(error);
     await signOut(auth);
-    gateMessage.textContent = "계정 권한을 확인하지 못했습니다. 관리자에게 문의해 주세요.";
+    gateMessage.textContent = "���� ������ Ȯ������ ���߽��ϴ�. �����ڿ��� ������ �ּ���.";
   }
 });
 
@@ -73,7 +71,7 @@ searchForm.addEventListener("submit", async (event) => {
   if (!query) return;
   const user = auth.currentUser;
   if (!user) return;
-  setNotice("학생 정보를 찾고 있습니다…", "info");
+  setNotice("�л� ������ ã�� �ֽ��ϴ١�", "info");
   results.replaceChildren();
   try {
     const token = await user.getIdToken();
@@ -82,18 +80,19 @@ searchForm.addEventListener("submit", async (event) => {
       cache: "no-store"
     });
     if (!response.ok) {
-      if (response.status === 404 || response.status === 501) throw new Error("연동 대기");
-      if (response.status === 401 || response.status === 403) throw new Error("권한 없음");
-      throw new Error("검색 오류");
+      if (response.status === 404 || response.status === 501) throw new Error("���� ���");
+      if (response.status === 401 || response.status === 403) throw new Error("���� ����");
+      throw new Error("�˻� ����");
     }
     const payload = await response.json();
     const students = Array.isArray(payload.students) ? payload.students : [];
     students.forEach((student) => results.append(makeStudentCard(student)));
-    setNotice(students.length ? `${students.length}명의 학생을 찾았습니다.` : "검색 결과가 없습니다.", students.length ? "success" : "info");
+    setNotice(students.length ? `${students.length}���� �л��� ã�ҽ��ϴ�.` : "�˻� ����� �����ϴ�.", students.length ? "success" : "info");
   } catch (error) {
-    if (error.message === "연동 대기") setNotice("학생 데이터 API가 아직 연결되지 않았습니다. README의 서버 연동 항목을 먼저 완료해 주세요.", "info");
-    else if (error.message === "권한 없음") setNotice("이 정보에 접근할 권한이 없습니다. 학교 관리자에게 문의해 주세요.", "error");
-    else { console.error(error); setNotice("검색 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.", "error"); }
+    if (error.message === "���� ���") setNotice("�л� ������ API�� ���� ������� �ʾҽ��ϴ�. README�� ���� ���� �׸��� ���� �Ϸ��� �ּ���.", "info");
+    else if (error.message === "���� ����") setNotice("�� ������ ������ ������ �����ϴ�. �б� �����ڿ��� ������ �ּ���.", "error");
+    else if (error instanceof TypeError) setNotice("�˻� ������ ������ �� �����ϴ�. Firebase Functions ���� ���¸� Ȯ���� �ּ���.", "error");
+    else { console.error(error); setNotice("�˻� �� ������ �߻��߽��ϴ�. ��� �� �ٽ� �õ��� �ּ���.", "error"); }
   }
 });
 
@@ -104,21 +103,21 @@ function makeStudentCard(student) {
   heading.className = "student-heading";
   const identity = document.createElement("div");
   const name = document.createElement("h2");
-  name.textContent = safeText(student.name, "이름 미등록");
+  name.textContent = safeText(student.name, "�̸� �̵��");
   const sub = document.createElement("p");
   sub.className = "student-sub";
-  sub.textContent = [student.grade && `${student.grade}학년`, student.class && `${student.class}반`].filter(Boolean).join(" · ") || "학년/반 정보 없음";
+  sub.textContent = [student.grade && `${student.grade}�г�`, student.class && `${student.class}��`].filter(Boolean).join(" �� ") || "�г�/�� ���� ����";
   identity.append(name, sub);
   const number = document.createElement("span");
   number.className = "student-id";
-  number.textContent = student.studentNumber ? `번호 ${student.studentNumber}` : "";
+  number.textContent = student.studentNumber ? `��ȣ ${student.studentNumber}` : "";
   heading.append(identity, number);
   const grid = document.createElement("div");
   grid.className = "info-grid";
   grid.append(
-    panel("시간표", student.timetable, "시간표 데이터 없음"),
-    panel("오늘 출결", student.attendance, "오늘 출결 데이터 없음"),
-    panel("보건실", student.health, "보건실 기록 없음")
+    panel("�ð�ǥ", student.timetable, "�ð�ǥ ������ ����"),
+    panel("���� ���", student.attendance, "���� ��� ������ ����"),
+    panel("���ǽ�", student.health, "���ǽ� ��� ����")
   );
   card.append(heading, grid);
   return card;
@@ -134,3 +133,4 @@ function panel(title, value, emptyText) {
 }
 function safeText(value, fallback) { return typeof value === "string" && value.trim() ? value.trim() : fallback; }
 function setNotice(message, kind) { notice.textContent = message; notice.dataset.kind = kind; }
+
