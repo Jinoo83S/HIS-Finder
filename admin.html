@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10253f">
+  <title>������ ���� | HIS �л� ���� ã��</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+  <style>
+    .admin-main{width:min(100% - 40px,920px);margin:0 auto;flex:1;padding-bottom:48px}.admin-intro{padding:38px 0 20px}.admin-intro h1{font-size:26px;margin:0 0 8px}.source-list{display:grid;gap:14px}.source-card{padding:20px;background:#fff;border:1px solid var(--line);border-radius:12px}.source-card h2{margin:0 0 6px;font-size:16px}.source-card .muted{margin:0 0 14px;font-size:12px}.source-card label{display:block;margin:12px 0 6px;font-size:12px;font-weight:700}.source-card input{width:100%;padding:10px 12px;border:1px solid #cfd7e1;border-radius:7px;font-size:13px}.source-meta{color:#758191;font-size:11px;margin-top:9px}.admin-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.admin-actions .button{font-size:12px;padding:9px 13px}.sync-button{background:#edf2f7;color:#284564;border:1px solid #d8e0e9}.sync-button:hover{background:#e2eaf2}.admin-status{margin:14px 0 0;font-size:12px;color:var(--muted);min-height:20px}.admin-status.error{color:#a44436}.admin-status.success{color:#287a58}.admin-note{margin:18px 0;padding:14px;border:1px solid #eadfcf;border-radius:9px;background:#fffaf2;color:#7d6038;font-size:12px;line-height:1.7}.back-link{color:#e1e7ef;font-size:12px;text-decoration:none}@media(max-width:680px){.admin-main{width:calc(100% - 28px)}.admin-intro{padding:28px 0 18px}.admin-intro h1{font-size:22px}.source-card{padding:16px}}
+  </style>
+</head>
+<body>
+  <div id="gate" class="gate">
+    <div class="gate-card">
+      <div class="brand-mark">HIS</div>
+      <p class="eyebrow">ADMINISTRATION</p>
+      <h1>������ ����</h1>
+      <p id="gate-message" class="muted">HIS ������ �������� �α����� �ּ���.</p>
+      <button id="login-button" class="button primary">Google �������� �α���</button>
+      <p id="gate-error" class="message" aria-live="polite"></p>
+    </div>
+  </div>
+
+  <div id="app" class="app-shell" hidden>
+    <header class="topbar">
+      <a class="brand" href="./"><span class="brand-mark small">HIS</span><span>�л� ���� ã�� �� ������</span></a>
+      <div class="account"><a class="back-link" href="./">�л� �˻�</a><span id="account-email"></span><button id="logout-button" class="button ghost">�α׾ƿ�</button></div>
+    </header>
+    <main class="admin-main">
+      <section class="admin-intro">
+        <p class="eyebrow">DATA SOURCE SETTINGS</p>
+        <h1>��Ʈ �ּҿ� ����ȭ ����</h1>
+        <p class="muted">��Ʈ �ּҸ� �����ϰ� �ڷẰ ����ȭ�� �����մϴ�. �ּҿ� ����ȭ ����� ������ ���� Firebase ������ ����˴ϴ�.</p>
+      </section>
+      <div id="admin-notice" class="notice" role="status" aria-live="polite">���� ������ Ȯ���ϰ� �ֽ��ϴ�.</div>
+      <form id="settings-form" class="source-list">
+        <section class="source-card">
+          <h2>�ð�ǥ</h2><p class="muted">�б�� �� �� ����ȭ�� �˻��� ĳ�÷� ����մϴ�.</p>
+          <label for="timetable-url">Google Sheets �ּ�</label><input id="timetable-url" type="url" inputmode="url" placeholder="https://docs.google.com/spreadsheets/d/..." required>
+          <p id="timetable-meta" class="source-meta">������ ����: ��� ����</p>
+          <div class="admin-actions"><button class="button primary" type="submit">�ּ� ����</button><button class="button sync-button" type="button" data-sync="timetable">�ð�ǥ ���� ����</button></div>
+        </section>
+        <section class="source-card">
+          <h2>���� ���</h2><p class="muted">���� �ڷḦ �Ϸ� �� �� �����մϴ�.</p>
+          <label for="attendance-url">Google Sheets �ּ�</label><input id="attendance-url" type="url" inputmode="url" placeholder="https://docs.google.com/spreadsheets/d/..." required>
+          <p id="attendance-meta" class="source-meta">������ ����: ��� ����</p>
+          <div class="admin-actions"><button class="button primary" type="submit">�ּ� ����</button><button class="button sync-button" type="button" data-sync="attendance">��� ���� ����</button></div>
+        </section>
+        <section class="source-card">
+          <h2>���ǽ�</h2><p class="muted">�л��� ��ȸ�� �� �ֽ� �ڷḦ ���������� �����մϴ�.</p>
+          <label for="health-url">Google Sheets �ּ�</label><input id="health-url" type="url" inputmode="url" placeholder="https://docs.google.com/spreadsheets/d/..." required>
+          <p id="health-meta" class="source-meta">������ ����: ��ȸ �� �ֽ� �ڷ� ���</p>
+          <div class="admin-actions"><button class="button primary" type="submit">�ּ� ����</button><button class="button sync-button" type="button" data-sync="health">���ǽ� �ڷ� ���ΰ�ħ</button></div>
+        </section>
+      </form>
+      <div id="action-status" class="admin-status" aria-live="polite"></div>
+      <aside class="admin-note">����ȭ API�� �����Ǳ� ������ �ּ� ���常 �����մϴ�. �л� �ڷḦ GitHub ���Ͽ� �������� ������, ����ȭ �� ������ ����Ǵ� Firebase ����Ҹ� ����ؾ� �մϴ�. ������ ����� Firebase ���� �������� role�� <code>admin</code>�� �������� ǥ�õ˴ϴ�.</aside>
+    </main>
+    <footer>Handong International School <span>������ ���� ������ ��ϵ˴ϴ�.</span></footer>
+  </div>
+  <script type="module" src="./admin.js"></script>
+</body>
+</html>
+
