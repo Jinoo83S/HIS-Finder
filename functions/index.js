@@ -11,6 +11,7 @@ initializeApp();
 const db = getFirestore();
 const REGION = "asia-northeast3";
 const DOMAIN = "his.sc.kr";
+const ADMIN_EMAIL = "jinwoosuk@his.sc.kr";
 const CONFIG_REF = db.doc("adminSettings/studentFinder");
 const DATA_ROOT = db.collection("studentFinderData");
 const SOURCES = {
@@ -33,6 +34,14 @@ exports.studentFinderApi = onRequest({
       const q = String(req.query.q || "").trim();
       if (!q) return res.status(400).json({ error: "Search query is required." });
       return res.json({ students: await searchStudents(q) });
+    }
+    if (route === "admin/settings" && req.method === "GET") {
+      await requireAdmin(user);
+      return res.json({ sources: await getAdminSources() });
+    }
+    if (route === "admin/settings" && req.method === "PUT") {
+      await requireAdmin(user);
+      return res.json({ sources: await saveAdminSources(req.body?.sources, user.email) });
     }
     const syncMatch = route.match(/^sync\/(timetable|attendance|health)$/);
     if (req.method === "POST" && syncMatch) {
@@ -73,8 +82,7 @@ async function requireUser(req) {
 
 async function requireAdmin(user) {
   const email = String(user.email || "").toLowerCase();
-  const snapshot = await db.doc(`staff/${email}`).get();
-  if (!snapshot.exists || snapshot.data().role !== "admin") throw httpError(403, "Admin access required.");
+  if (email !== ADMIN_EMAIL) throw httpError(403, "Admin access required.");
 }
 
 async function getSources() {
@@ -83,6 +91,36 @@ async function getSources() {
   const sources = {};
   for (const name of Object.keys(SOURCES)) sources[name] = configured[name]?.url || SOURCES[name];
   return sources;
+}
+
+async function getAdminSources() {
+  const snapshot = await CONFIG_REF.get();
+  const configured = snapshot.exists ? snapshot.data().sources || {} : {};
+  const result = {};
+  for (const name of Object.keys(SOURCES)) {
+    const saved = configured[name] || {};
+    const timestamp = saved.lastSyncedAt;
+    result[name] = {
+      url: saved.url || SOURCES[name],
+      lastSyncedAt: timestamp?.toDate ? timestamp.toDate().toISOString() : timestamp || null
+    };
+  }
+  return result;
+}
+
+async function saveAdminSources(input, email) {
+  if (!input || typeof input !== "object") throw httpError(400, "Source URLs are required.");
+  const snapshot = await CONFIG_REF.get();
+  const configured = snapshot.exists ? snapshot.data().sources || {} : {};
+  for (const name of Object.keys(SOURCES)) {
+    const url = String(input[name]?.url || "").trim();
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" || parsed.hostname !== "docs.google.com") throw httpError(400, "Use a Google Sheets URL.");
+    parseSheetUrl(url);
+    configured[name] = { ...(configured[name] || {}), url };
+  }
+  await CONFIG_REF.set({ sources: configured, updatedAt: Timestamp.now(), updatedBy: String(email).toLowerCase() }, { merge: true });
+  return getAdminSources();
 }
 
 async function sheetsClient() {
