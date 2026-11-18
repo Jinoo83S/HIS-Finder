@@ -8,7 +8,7 @@
 2. [Code.gs](apps-script/Code.gs)를 기본 스크립트 파일에 붙여넣고, HTML 파일 `Index`를 만들어 [Index.html](apps-script/Index.html)의 내용을 붙여넣습니다.
 3. 프로젝트 설정에서 **편집기에 appsscript.json 매니페스트 파일 표시**를 켜고 [appsscript.json](apps-script/appsscript.json)의 내용을 붙여넣습니다.
 4. **배포 → 새 배포 → 웹 앱**을 선택합니다. **실행 계정은 나**, **액세스 권한은 학교 Google Workspace 도메인 사용자**로 설정합니다. 배포 계정에 세 원본 시트의 읽기 권한이 있어야 합니다.
-5. 배포 후 `/exec` 주소를 복사합니다. [web-app-url.js](web-app-url.js)의 빈 문자열을 그 주소로 바꾸면 GitHub Pages의 시작 버튼이 활성화됩니다.
+5. 배포 후 `/exec` 주소를 복사해 [index.html](index.html)의 `id="launch"` 링크 주소에 입력합니다. 현재 학교 배포 주소는 연결되어 있습니다.
 6. 웹 앱을 열고 관리 메뉴에서 시간표를 한 번 연동합니다. 출결 자동 갱신을 켜면 Apps Script가 한국시간 오전 7시대에 갱신합니다. 첫 조회 때 당일 캐시가 없으면 즉시 갱신합니다. 관리자와 다른 학교 계정으로 각각 접속해 권한을 확인합니다.
 
 Google Workspace 정책 때문에 로그인한 사용자의 이메일을 읽을 수 없으면 웹 앱은 접근을 거부합니다. 해당 경우 학교 Workspace의 Apps Script 및 계정 정책을 확인합니다.
