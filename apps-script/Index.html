@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <base target="_top">
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#f4f6f9;color:#182536;font:16px system-ui,sans-serif}
+    header{background:#10253f;color:white;padding:14px max(20px,calc((100vw - 900px)/2));display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+    header strong{margin-right:auto}header small{overflow-wrap:anywhere}
+    main{max-width:940px;margin:auto;padding:32px 20px}h1{font-size:1.55rem}h2{font-size:1.12rem}h3{font-size:.95rem}
+    section.card,article{padding:20px;background:white;border:1px solid #dce4ec;border-radius:12px;margin:14px 0}
+    label{display:block;margin-bottom:8px;font-weight:600}input{min-width:0;flex:1;border:1px solid #b6c4d2;border-radius:7px;padding:11px;font:inherit}
+    button{border:1px solid transparent;border-radius:7px;padding:10px 13px;background:#1c3c60;color:#fff;font:inherit;cursor:pointer}
+    header button{border-color:#a0b5cd}button:disabled{opacity:.55;cursor:wait}
+    .row{display:flex;gap:8px;flex-wrap:wrap}.row input{min-width:180px}.muted{color:#52657a}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+    .grid section{background:#f4f6f9;border-radius:8px;padding:12px}.grid h3{margin-top:0}
+    ul{padding-left:19px}p,li{overflow-wrap:anywhere}[hidden]{display:none!important}
+  </style>
+</head>
+<body>
+  <header>
+    <strong>HIS Finder</strong><small id="email"></small>
+    <button type="button" id="panel" hidden></button>
+    <button type="button" id="language" lang="en">English</button>
+  </header>
+  <main>
+    <p id="access" role="status"></p>
+    <section id="search" hidden>
+      <h1 data-key="searchTitle"></h1>
+      <form class="card" id="search-form">
+        <label for="query" data-key="query"></label>
+        <div class="row">
+          <input id="query" type="search" required maxlength="80" autocomplete="off">
+          <button data-key="search"></button>
+        </div>
+      </form>
+      <p id="search-status" role="status"></p>
+      <div id="results"></div>
+    </section>
+    <section id="admin" hidden>
+      <h1 data-key="settings"></h1>
+      <button type="button" id="schedule" data-key="enableSchedule"></button>
+      <p id="admin-status" role="status"></p>
+      <div id="sources"></div>
+    </section>
+  </main>
+  <script>
+    const labels = {
+      ko: {
+        searchTitle:'학생 빠른 찾기', query:'이름, 학번, 학년, 반 또는 번호', search:'검색', settings:'시트 연동 관리',
+        enableSchedule:'출결 자동 갱신 켜기', connecting:'학교 계정을 확인하고 있습니다…',
+        accessError:'학교 계정을 확인할 수 없습니다. @his.sc.kr 계정으로 웹 앱을 열어 주세요.',
+        loading:'처리 중입니다…', failed:'처리하지 못했습니다. 시트 주소, 읽기 권한과 열 제목을 확인해 주세요.',
+        timetable:'시간표', attendance:'오늘 출결', health:'보건실', none:'표시할 기록 없음', visit:'오늘 방문 기록 있음',
+        save:'주소 저장', sync:'지금 연동', noSync:'연동 기록 없음', lastSync:'마지막 연동', saved:'주소를 저장했습니다.',
+        synced:'연동한 행', scheduled:'출결 자동 갱신을 설정했습니다.', count:'검색 결과', unavailable:'조회할 수 없는 자료'
+      },
+      en: {
+        searchTitle:'Find a student', query:'Name, student ID, grade, class, or number', search:'Search', settings:'Manage sheet connections',
+        enableSchedule:'Enable daily attendance refresh', connecting:'Checking your school account…',
+        accessError:'Unable to verify your school account. Open this web app with an @his.sc.kr account.',
+        loading:'Working…', failed:'The request failed. Check the sheet URL, read permissions, and column headers.',
+        timetable:'Timetable', attendance:'Today’s attendance', health:'Nurse’s office', none:'No record to display', visit:'Visit recorded today',
+        save:'Save URL', sync:'Sync now', noSync:'No sync recorded', lastSync:'Last sync', saved:'URL saved.',
+        synced:'Rows synced', scheduled:'Daily attendance refresh enabled.', count:'Results', unavailable:'Data unavailable'
+      }
+    };
+    const byId = id => document.getElementById(id);
+    const keys = ['timetable', 'attendance', 'health'];
+    let language = 'ko';
+    try { language = localStorage.getItem('hisFinderLanguage') === 'en' ? 'en' : 'ko'; } catch (_) {}
+    let admin = false;
+    let showAdmin = false;
+    let sources = [];
+    let results;
+    let accessStatus = 'connecting';
+    let searchStatus = '';
+    let adminStatus = '';
+    let syncedCount;
+    const t = key => labels[language][key] || '';
+    const rpc = (method, ...args) => new Promise((resolve, reject) => {
+      google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[method](...args);
+    });
+    const element = (tag, text) => {
+      const node = document.createElement(tag);
+      node.textContent = text;
+      return node;
+    };
+    function render() {
+      document.documentElement.lang = language;
+      byId('language').textContent = language === 'en' ? '한국어' : 'English';
+      byId('language').lang = language === 'en' ? 'ko' : 'en';
+      document.querySelectorAll('[data-key]').forEach(node => node.textContent = t(node.dataset.key));
+      byId('access').textContent = t(accessStatus);
+      byId('panel').hidden = !admin;
+      byId('panel').textContent = t(showAdmin ? 'searchTitle' : 'settings');
+      byId('search').hidden = Boolean(accessStatus) || showAdmin;
+      byId('admin').hidden = !admin || !showAdmin;
+      renderResults();
+      renderSources();
+    }
+    function renderResults() {
+      const unavailable = results?.unavailable || [];
+      byId('search-status').textContent = searchStatus ? t(searchStatus) : results
+        ? t('count') + ' ' + results.students.length + (unavailable.length ? ' · ' + t('unavailable') + ' — ' + unavailable.map(t).join(', ') : '') : '';
+      const cards = (results?.students || []).map(student => {
+        const card = element('article', '');
+        card.append(element('h2', [student.name, [student.grade, student.class, student.number].filter(Boolean).join(' · ')].filter(Boolean).join(' — ')));
+        const grid = element('div', '');
+        grid.className = 'grid';
+        keys.forEach(key => {
+          const section = element('section', '');
+          section.append(element('h3', t(key)));
+          const list = element('ul', '');
+          const entries = student[key];
+          if (unavailable.includes(key)) section.append(element('p', t('unavailable')));
+          else if (!entries.length) section.append(element('p', t('none')));
+          else {
+            entries.forEach(value => list.append(element('li', value === 'VISIT_TODAY' ? t('visit') : value)));
+            section.append(list);
+          }
+          grid.append(section);
+        });
+        card.append(grid);
+        return card;
+      });
+      byId('results').replaceChildren(...cards);
+    }
+    function renderSources() {
+      byId('admin-status').textContent = t(adminStatus) + (adminStatus === 'synced' ? ' ' + syncedCount : '');
+      const drafts = new Map([...byId('sources').querySelectorAll('input')].map(input => [input.id, input.value]));
+      byId('sources').replaceChildren(...sources.map(source => {
+        const card = element('section', '');
+        card.className = 'card';
+        const form = element('form', '');
+        form.className = 'row';
+        const input = element('input', '');
+        input.id = source.key + '-url';
+        input.type = 'url';
+        input.required = true;
+        input.value = drafts.get(input.id) ?? source.url;
+        input.setAttribute('aria-label', t(source.key) + ' Google Sheets URL');
+        const save = element('button', t('save'));
+        const sync = element('button', t('sync'));
+        sync.type = 'button';
+        save.disabled = sync.disabled = adminStatus === 'loading';
+        form.append(input, save, sync);
+        form.addEventListener('submit', event => {
+          event.preventDefault();
+          change('saveSource', source.key, input.value.trim());
+        });
+        sync.addEventListener('click', () => change('syncSource', source.key));
+        const date = source.lastSync && new Date(source.lastSync).toLocaleString(language, {timeZone:'Asia/Seoul'});
+        card.append(element('h2', t(source.key)), form, element('p', date ? t('lastSync') + ' · ' + date : t('noSync')));
+        return card;
+      }));
+      byId('schedule').disabled = adminStatus === 'loading';
+    }
+    async function change(method, ...args) {
+      if (adminStatus === 'loading') return;
+      adminStatus = 'loading';
+      renderSources();
+      try {
+        const response = await rpc(method, ...args);
+        if (method === 'settings') { sources = response; adminStatus = ''; }
+        if (method === 'saveSource') { sources = response; adminStatus = 'saved'; }
+        if (method === 'syncSource') {
+          sources = response.sources;
+          syncedCount = response.count;
+          adminStatus = 'synced';
+        }
+        if (method === 'installAttendanceTrigger') adminStatus = 'scheduled';
+      } catch (_) { adminStatus = 'failed'; }
+      renderSources();
+    }
+    byId('language').addEventListener('click', () => {
+      language = language === 'en' ? 'ko' : 'en';
+      try { localStorage.setItem('hisFinderLanguage', language); } catch (_) {}
+      render();
+    });
+    byId('panel').addEventListener('click', () => {
+      showAdmin = !showAdmin;
+      render();
+      if (showAdmin && !sources.length) change('settings');
+    });
+    byId('schedule').addEventListener('click', () => change('installAttendanceTrigger'));
+    byId('search-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      if (searchStatus === 'loading') return;
+      const query = byId('query').value.trim();
+      if (!query) return;
+      searchStatus = 'loading';
+      results = null;
+      renderResults();
+      try { results = await rpc('searchStudents', query); searchStatus = ''; }
+      catch (_) { searchStatus = 'failed'; }
+      renderResults();
+    });
+    render();
+    rpc('account').then(user => {
+      byId('email').textContent = user.email;
+      admin = user.admin;
+      accessStatus = '';
+      render();
+    }).catch(() => { accessStatus = 'accessError'; render(); });
+  </script>
+</body>
+</html>
