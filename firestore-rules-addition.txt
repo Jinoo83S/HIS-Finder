@@ -1,0 +1,24 @@
+// Insert inside match /databases/{database}/documents in the existing his-main rules.
+function finderSchoolAccount() {
+  return request.auth != null &&
+    request.auth.token.email_verified == true &&
+    request.auth.token.firebase.sign_in_provider == 'google.com' &&
+    request.auth.token.email.matches('^[^@]+@his[.]sc[.]kr$');
+}
+
+function finderCanPublish() {
+  return finderSchoolAccount() && request.auth.token.email == 'jinwoosuk@his.sc.kr';
+}
+
+match /finderConfig/current {
+  allow get: if finderSchoolAccount();
+  allow create, update: if finderCanPublish();
+}
+
+match /finderSnapshots/{version}/students/{studentId} {
+  allow get: if finderSchoolAccount() &&
+    get(/databases/$(database)/documents/finderConfig/current).data.version == version;
+  allow list: if finderSchoolAccount() && request.query.limit <= 40 &&
+    get(/databases/$(database)/documents/finderConfig/current).data.version == version;
+  allow write: if finderCanPublish();
+}

@@ -2,6 +2,11 @@ import { apiUrl } from './config.js';
 
 const copy = {
   ko: {
+    previewPublic: '공개 시간표 미리보기', publishPublic: 'GitHub에 공개', published: '공개 시간표를 GitHub에 올렸습니다.',
+    publicScope: '아래 학년·반·요일·교시·과목·교실이 GitHub Pages에 공개됩니다.',
+    rules: 'his-main의 HIS Finder 전용 Firestore 규칙을 확인해 주세요.',
+    githubToken: 'Apps Script의 GitHub 쓰기 토큰 설정이 필요합니다.',
+    previewChanged: '시간표가 바뀌었습니다. 미리보기를 다시 확인해 주세요.',
     title: '학생 찾기', intro: '학교 Google 계정으로 로그인하여 학생 시간표와 오늘의 출결을 확인하세요.',
     signin: '학교 계정으로 로그인', logout: '로그아웃', settings: '관리자 설정', close: '닫기',
     studentName: '학생 이름', search: '검색', refresh: '지금 새로고침', empty: '일치하는 학생이 없습니다.',
@@ -24,6 +29,11 @@ const copy = {
     days: ['월요일','화요일','수요일','목요일','금요일']
   },
   en: {
+    previewPublic: 'Preview public timetable', publishPublic: 'Publish to GitHub', published: 'Public timetable published to GitHub.',
+    publicScope: 'The grades, classes, days, periods, courses and rooms below will be public on GitHub Pages.',
+    rules: 'Check the HIS Finder Firestore rules in his-main.',
+    githubToken: 'Add the GitHub write token in Apps Script settings.',
+    previewChanged: 'The timetable changed. Preview it again.',
     title: 'Find a student', intro: 'Sign in with your school Google account to see student timetables and today’s attendance.',
     signin: 'Sign in with school Google', logout: 'Sign out', settings: 'Admin settings', close: 'Close',
     studentName: 'Student name', search: 'Search', refresh: 'Refresh now', empty: 'No matching students.',
@@ -53,6 +63,8 @@ const dayKeys = ['월','화','수','목','금'];
 const slotKeys = ['HR','1','2','3','4','5','6','7','Lunch'];
 let language = localStorage.getItem('his-finder-language') === 'en' ? 'en' : 'ko';
 let firebaseAuth, authSdk, session, selected, details, latestSettings;
+let db, firestore, publicPreview;
+let publicSlots = new Map();
 let matches = [];
 let generation = 0;
 let authGeneration = 0;
@@ -78,7 +90,9 @@ function errorText(error) {
   const messages = {
     SETUP_REQUIRED: 'setup', NETWORK: 'network', AUTH_REQUIRED: 'auth', AUTH_UNAVAILABLE: 'network',
     SYNC_REQUIRED: 'syncFirst', BAD_PERIODS: 'badPeriods', OVERLAPPING_PERIODS: 'overlap',
-    BAD_SHORT_DATES: 'badDates', TERM_REQUIRED: 'termRequired'
+    BAD_SHORT_DATES: 'badDates', TERM_REQUIRED: 'termRequired',
+    FIRESTORE_RULES_REQUIRED: 'rules', 'permission-denied': 'rules',
+    GITHUB_TOKEN_REQUIRED: 'githubToken', PUBLIC_PREVIEW_CHANGED: 'previewChanged'
   };
   return messages[code] ? t(messages[code]) : t('warning') + ' (' + code + ')';
 }
@@ -101,7 +115,7 @@ async function call(action, values = {}) {
   try {
     const response = await fetch(apiUrl, {
       method: 'POST', credentials: 'omit', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, token, ...values }), signal: AbortSignal.timeout(65000)
+      body: JSON.stringify({ action, token, ...values }), signal: AbortSignal.timeout(action === 'sync' ? 240000 : 65000)
     });
     if (!response.ok) throw new Error('NETWORK');
     body = await response.json();
@@ -188,8 +202,9 @@ function renderTimetable() {
         const item = details.lessons[day.key + ':' + slot];
         if (item?.unresolved) cell.append(node('span', t('unresolved'), 'warn'));
         else if (item) {
-          cell.append(node('strong', item[language], 'lesson'));
-          if (item.room) cell.append(node('span', item.room, 'room'));
+          const schedule = publicSlots.get(item.publicKey) || item;
+          cell.append(node('strong', schedule[language], 'lesson'));
+          if (schedule.room) cell.append(node('span', schedule.room, 'room'));
           if (item.teacher) cell.append(node('span', item.teacher, 'secondary'));
         }
         if (day.today) for (const event of details.attendance?.events || []) {
@@ -217,7 +232,8 @@ function renderStudent() {
     const status = details[type];
     const panel = node('div');
     panel.append(node('strong', t(type)));
-    if (status.error) panel.append(node('span', errorText(new Error(status.error)), 'warn'));
+    if (!status) panel.append(node('span', t('loading')));
+    else if (status.error) panel.append(node('span', errorText(new Error(status.error)), 'warn'));
     else {
       const events = status.events?.map(item => [t(item.state), item.period && label(item.period), item.time].filter(Boolean).join(' · '));
       const summary = type === 'clinic' ? t(status.visited ? 'visit' : status.ambiguous ? 'ambiguous' : 'noVisit')
@@ -239,21 +255,23 @@ async function openStudent(student) {
   drawMatches();
   notice('notice', t('loading'));
   try {
-    const result = await call('student', { id: student.id });
     if (generation !== request) return;
-    details = result;
+    const { lessons, term, snapshotAt } = student;
+    details = { lessons, term, snapshotAt };
     byId('student').hidden = false;
     renderStudent();
     notice('notice');
+    void refresh(false, true);
   } catch (error) {
     if (generation === request) notice('notice', errorText(error));
   }
 }
 
-async function refresh(force = false) {
-  if (!details || !selected || updating || (!force && document.hidden)) return;
+async function refresh(force = false, initial = false) {
+  if (!details || !selected || (!force && !initial && document.hidden)) return;
   const request = generation;
-  updating = true;
+  if (updating === request) return;
+  updating = request;
   byId('refresh').disabled = true;
   try {
     const result = await call('live', { id: selected.id, force });
@@ -262,10 +280,16 @@ async function refresh(force = false) {
     renderStudent();
     notice('notice');
   } catch (error) {
-    if (generation === request) notice('notice', errorText(error));
+    if (generation === request) {
+      details = { ...details, attendance: { error: error.message }, clinic: { error: error.message } };
+      renderStudent();
+      notice('notice', errorText(error));
+    }
   } finally {
-    updating = false;
-    byId('refresh').disabled = false;
+    if (updating === request) {
+      updating = false;
+      byId('refresh').disabled = false;
+    }
   }
 }
 
@@ -362,11 +386,61 @@ function inspection(result) {
 }
 
 async function settingsAction(button, work) {
-  const controls = [byId('inspect'), byId('sync'), byId('settings-form').querySelector('button[type="submit"], button.primary'), button];
+  const controls = [byId('inspect'), byId('sync'), byId('preview-public'), byId('publish-public'),
+    byId('settings-form').querySelector('button[type="submit"], button.primary'), button];
   controls.forEach(control => { if (control) control.disabled = true; });
   notice('settings-notice', t('loading'));
   try { await work(); } catch (error) { notice('settings-notice', errorText(error)); }
   finally { controls.forEach(control => { if (control) control.disabled = false; }); }
+}
+
+async function searchDirectory(value) {
+  const term = value.normalize('NFKC').toLowerCase().replace(/\s/g, '');
+  if (!term) return [];
+  const current = await firestore.getDocFromServer(firestore.doc(db, 'finderConfig', 'current'));
+  if (!current.exists()) throw new Error('SYNC_REQUIRED');
+  const { version, term: semester, at } = current.data();
+  const students = firestore.collection(db, 'finderSnapshots', version, 'students');
+  const results = await firestore.getDocsFromServer(firestore.query(students,
+    firestore.where('terms', 'array-contains', term), firestore.limit(40)));
+  return results.docs.map(student => ({ ...student.data(), id: student.id, term: semester, snapshotAt: at }))
+    .sort((a, b) => Number(a.grade) - Number(b.grade) || a.group.localeCompare(b.group) || Number(a.number) - Number(b.number));
+}
+
+async function loadPublicTimetable() {
+  try {
+    const response = await fetch(new URL('./timetable.json', document.baseURI), { cache: 'no-cache' });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (data.schema === 1 && Array.isArray(data.slots)) {
+      publicSlots = new Map(data.slots.map(slot => [slot.key, slot]));
+      renderTimetable();
+    }
+  } catch (_) {}
+}
+
+function clearPublicPreview() {
+  publicPreview = undefined;
+  byId('public-preview').hidden = byId('publish-public').hidden = true;
+  byId('public-preview').replaceChildren();
+}
+
+function showPublicPreview(preview) {
+  publicPreview = preview;
+  const table = node('table');
+  const body = node('tbody');
+  const slots = [...preview.data.slots].sort((a, b) => Number(a.grade) - Number(b.grade) ||
+    a.group.localeCompare(b.group) || dayKeys.indexOf(a.day) - dayKeys.indexOf(b.day) ||
+    slotKeys.indexOf(a.period) - slotKeys.indexOf(b.period));
+  for (const slot of slots) {
+    const row = node('tr');
+    const day = t('days')[dayKeys.indexOf(slot.day)];
+    for (const value of [slot.grade + slot.group, day, label(slot.period), slot.ko, slot.en, slot.room]) row.append(node('td', value));
+    body.append(row);
+  }
+  table.append(body);
+  byId('public-preview').replaceChildren(node('p', t('publicScope') + ' · ' + preview.branch), table);
+  byId('public-preview').hidden = byId('publish-public').hidden = false;
 }
 
 byId('language').addEventListener('click', () => {
@@ -375,6 +449,7 @@ byId('language').addEventListener('click', () => {
   translate();
   if (!apiUrl) notice('notice', t('setup'));
   renderStudent();
+  if (publicPreview) showPublicPreview(publicPreview);
 });
 byId('search-form').addEventListener('submit', async event => {
   event.preventDefault();
@@ -384,7 +459,7 @@ byId('search-form').addEventListener('submit', async event => {
   drawMatches();
   notice('notice', t('loading'));
   try {
-    const result = await call('search', { query: byId('query').value });
+    const result = await searchDirectory(byId('query').value);
     if (generation !== request) return;
     matches = result;
     drawMatches();
@@ -398,6 +473,7 @@ byId('refresh').addEventListener('click', () => refresh(true));
 byId('settings-button').addEventListener('click', event => settingsAction(event.currentTarget, async () => {
   byId('settings').showModal();
   byId('inspection').replaceChildren();
+  clearPublicPreview();
   const settings = await call('settings');
   renderSettings(settings);
   const state = settings.snapshot;
@@ -412,10 +488,24 @@ byId('settings-form').addEventListener('submit', event => {
   event.preventDefault();
   settingsAction(event.submitter, async () => {
     const settings = await call('save', { settings: collectSettings() });
+    clearPublicPreview();
     renderSettings(settings);
     session = { ...session, profiles: settings.profiles, overrides: settings.overrides };
     renderStudent();
     notice('settings-notice', t('saved'));
+  });
+});
+byId('preview-public').addEventListener('click', event => settingsAction(event.currentTarget, async () => {
+  clearPublicPreview();
+  showPublicPreview(await call('previewPublic'));
+  notice('settings-notice');
+}));
+byId('publish-public').addEventListener('click', event => {
+  if (!publicPreview || !window.confirm(t('publicScope'))) return;
+  settingsAction(event.currentTarget, async () => {
+    const result = await call('publishPublic', { revision: publicPreview.revision });
+    clearPublicPreview();
+    notice('settings-notice', t('published') + ' · ' + result.count);
   });
 });
 byId('sync').addEventListener('click', event => {
@@ -432,11 +522,16 @@ byId('sync').addEventListener('click', event => {
 async function start() {
   translate();
   try {
-    const [config, firebaseApp, auth] = await Promise.all([call('config'),
+    const [config, firebaseApp, auth, store] = await Promise.all([call('config'),
       import('https://www.gstatic.com/firebasejs/12.5.0/firebase-app.js'),
-      import('https://www.gstatic.com/firebasejs/12.5.0/firebase-auth.js')]);
+      import('https://www.gstatic.com/firebasejs/12.5.0/firebase-auth.js'),
+      import('https://www.gstatic.com/firebasejs/12.5.0/firebase-firestore.js')]);
     authSdk = auth;
-    firebaseAuth = auth.getAuth(firebaseApp.initializeApp(config));
+    firestore = store;
+    const app = firebaseApp.initializeApp(config);
+    db = firestore.getFirestore(app);
+    firebaseAuth = auth.getAuth(app);
+    void loadPublicTimetable();
     await auth.setPersistence(firebaseAuth, auth.browserSessionPersistence);
     auth.onAuthStateChanged(firebaseAuth, async user => {
       const request = ++authGeneration;
@@ -451,6 +546,7 @@ async function start() {
         const dialog = byId('settings');
         if (dialog.open) dialog.close();
         byId('inspection').replaceChildren();
+        clearPublicPreview();
         byId('sources').replaceChildren();
         byId('profiles').replaceChildren();
         latestSettings = undefined;

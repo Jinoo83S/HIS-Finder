@@ -4,7 +4,7 @@ const CACHE_SECONDS = 60;
 const SOURCE_KEYS = ['courses', 'schedule', 'attendance', 'clinic'];
 
 function doGet() {
-  return json_({ service: 'HIS Finder', version: 1 });
+  return json_({ service: 'HIS Finder', version: 2 });
 }
 
 function doPost(e) {
@@ -91,7 +91,11 @@ function dispatch_(request, account, props) {
         props.setProperty('SETTINGS', JSON.stringify(validated));
         return { ...validated, snapshot: snapshotInfo_(props) };
       });
-      if (request.action === 'sync') return locked_(() => sync_(props, settings_(props)));
+      if (request.action === 'sync') return locked_(() => sync_(props, settings_(props), request.token));
+      if (request.action === 'previewPublic') return publicPreview_(settings, props);
+      if (request.action === 'publishPublic') {
+        return locked_(() => publishPublic_(settings_(props), props, request.revision));
+      }
       if (request.action === 'inspect') return inspect_(validateSettings_(request.settings).sources);
       throw new Error('BAD_REQUEST');
   }
@@ -257,8 +261,9 @@ function weekday_(value) {
   return english >= 0 ? days[english] : '';
 }
 
-function buildStudents_(courseRows, scheduleRows) {
+function buildStudents_(courseRows, scheduleRows, publicSlots = []) {
   const roster = new Map();
+  const labels = new Map();
   for (const row of courseRows) {
     const name = clean_(row[0]);
     const grade = grade_(row[1]);
@@ -269,10 +274,14 @@ function buildStudents_(courseRows, scheduleRows) {
     if (!roster.has(key)) roster.set(key, { id: digest_(key).slice(0, 22), name, names: [name],
       grade, group, number, courses: new Map(), lessons: {} });
     const code = clean_(row[16]);
-    if (code) roster.get(key).courses.set(code, { ko: clean_(row[10]) || clean_(row[12]),
-      en: clean_(row[11]) || clean_(row[13]) });
+    const subject = { ko: clean_(row[10]) || clean_(row[12]), en: clean_(row[11]) || clean_(row[13]) };
+    if (code) {
+      roster.get(key).courses.set(code, subject);
+      if ((subject.ko || subject.en) && !labels.has(code)) labels.set(code, subject);
+    }
   }
   const slots = new Map();
+  const publicKeys = new Set();
   for (const row of scheduleRows) {
     const grade = grade_(row[0]);
     const group = group_(row[1]);
@@ -288,6 +297,19 @@ function buildStudents_(courseRows, scheduleRows) {
     const lessons = groupSlots.get(key);
     const room = [clean_(row[6]), clean_(row[8])].filter(Boolean);
     const lesson = { code, teacher: clean_(row[5]), room: [...new Set(room)].join(' / ') };
+    const title = labels.get(code);
+    if (title && /^[A-Z0-9]{1,4}$/.test(group)) {
+      const ko = title.ko || title.en;
+      const en = title.en || title.ko;
+      if (ko.length <= 100 && en.length <= 100 && lesson.room.length <= 100) {
+        const publicKey = digest_(JSON.stringify([grade, group, day, period, ko, en, lesson.room])).slice(0, 22);
+        if (!publicKeys.has(publicKey)) {
+          publicKeys.add(publicKey);
+          publicSlots.push({ key: publicKey, grade, group, day, period, ko, en, room: lesson.room });
+        }
+        lesson.publicKey = publicKey;
+      }
+    }
     if (!lessons.some(item => item.code === code && item.room === lesson.room && item.teacher === lesson.teacher)) lessons.push(lesson);
   }
   if (!roster.size) throw new Error('COURSES_LAYOUT_UNKNOWN');
@@ -317,11 +339,12 @@ function snapshotInfo_(props) {
   return JSON.parse(props.getProperty('SNAPSHOT') || 'null');
 }
 
-function sync_(props, settings) {
+function sync_(props, settings, token) {
   if (!settings.term) throw new Error('TERM_REQUIRED');
   const students = buildStudents_(table_(settings.sources.courses, 'courses').rows,
     table_(settings.sources.schedule, 'schedule').rows);
   const previous = snapshotInfo_(props);
+  const oldStudents = previous ? snapshot_(props).students : [];
   let bookId = props.getProperty('SNAPSHOT_BOOK');
   if (!bookId) {
     bookId = SpreadsheetApp.create('HIS Finder · 비공개 시간표 캐시').getId();
@@ -338,6 +361,14 @@ function sync_(props, settings) {
     tab.getRange(1, 1, chunks.length, 1).setValues(chunks);
     SpreadsheetApp.flush();
     props.setProperty('SNAPSHOT', JSON.stringify(info));
+    try {
+      writeFinderDirectory_(info, students, token);
+    } catch (error) {
+      if (previous) props.setProperty('SNAPSHOT', JSON.stringify(previous));
+      else props.deleteProperty('SNAPSHOT');
+      try { deleteFinderDirectory_(info.tab, students, token); } catch (_) {}
+      throw error;
+    }
   } catch (error) {
     try { book.deleteSheet(tab); } catch (_) {}
     throw error;
@@ -349,6 +380,9 @@ function sync_(props, settings) {
           old.getName() !== previous?.tab) book.deleteSheet(old);
     }
   } catch (_) {}
+  if (previous) {
+    try { deleteFinderDirectory_(previous.tab, oldStudents, token); } catch (_) {}
+  }
   return info;
 }
 
@@ -362,6 +396,96 @@ function snapshot_(props) {
     .getDataRange().getDisplayValues().map(row => row[0].slice(2)).join('');
   if (!hit && packed.length < 95000) cache.put(key, packed, 600);
   return JSON.parse(Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(packed), 'application/gzip')).getDataAsString());
+}
+
+function searchTerms_(name) {
+  const letters = [...norm_(name)].slice(0, 40);
+  const terms = new Set();
+  for (let start = 0; start < letters.length; start++) {
+    for (let end = start + 2; end <= letters.length; end++) terms.add(letters.slice(start, end).join(''));
+  }
+  if (letters.length === 1) terms.add(letters[0]);
+  return [...terms];
+}
+
+function firestoreValue_(value) {
+  if (typeof value === 'boolean') return { booleanValue: value };
+  if (typeof value === 'number') return { integerValue: String(value) };
+  if (typeof value === 'string') return { stringValue: value };
+  if (Array.isArray(value)) return { arrayValue: { values: value.map(firestoreValue_) } };
+  return { mapValue: { fields: Object.fromEntries(Object.entries(value).map(([key, item]) => [key, firestoreValue_(item)])) } };
+}
+
+const FINDER_DOCUMENTS = 'projects/' + PROJECT + '/databases/(default)/documents';
+
+function firestoreFetch_(path, token, writes) {
+  const options = { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true };
+  if (writes) Object.assign(options, { method: 'post', contentType: 'application/json', payload: JSON.stringify({ writes }) });
+  const response = UrlFetchApp.fetch('https://firestore.googleapis.com/v1/' + FINDER_DOCUMENTS + path, options);
+  if (response.getResponseCode() === 403) throw new Error('FIRESTORE_RULES_REQUIRED');
+  if (response.getResponseCode() !== 200) throw new Error('FIRESTORE_SYNC_FAILED');
+  return JSON.parse(response.getContentText());
+}
+
+function directoryPath_(version, id) {
+  return '/finderSnapshots/' + version + '/students/' + id;
+}
+
+function firestoreUpdate_(path, record) {
+  return { update: { name: FINDER_DOCUMENTS + path, fields: firestoreValue_(record).mapValue.fields } };
+}
+
+function commitFinderWrites_(writes, token) {
+  for (let i = 0; i < writes.length; i += 50) firestoreFetch_(':commit', token, writes.slice(i, i + 50));
+}
+
+function writeFinderDirectory_(info, students, token) {
+  const writes = students.map(({ id, name, grade, group, number, lessons }) =>
+    firestoreUpdate_(directoryPath_(info.tab, id), { name, grade, group, number, lessons, terms: searchTerms_(name) }));
+  commitFinderWrites_(writes, token);
+  try {
+    commitFinderWrites_([firestoreUpdate_('/finderConfig/current', { version: info.tab, term: info.term, at: info.at })], token);
+  } catch (error) {
+    // A lost response can follow a successful commit. Keep the new snapshot if the pointer already moved.
+    let current;
+    try { current = firestoreFetch_('/finderConfig/current', token); } catch (_) {}
+    if (current?.fields?.version?.stringValue !== info.tab) throw error;
+  }
+}
+
+function deleteFinderDirectory_(version, students, token) {
+  commitFinderWrites_(students.map(({ id }) => ({ delete: FINDER_DOCUMENTS + directoryPath_(version, id) })), token);
+}
+
+function publicPreview_(settings, props) {
+  if (!settings.term) throw new Error('TERM_REQUIRED');
+  const slots = [];
+  buildStudents_(table_(settings.sources.courses, 'courses').rows, table_(settings.sources.schedule, 'schedule').rows, slots);
+  if (!slots.length) throw new Error('NO_PUBLIC_SLOTS');
+  slots.sort((a, b) => a.key.localeCompare(b.key));
+  const data = { schema: 1, term: settings.term, slots };
+  const revision = digest_(JSON.stringify(data));
+  return { data, revision, branch: props.getProperty('GITHUB_BRANCH') || 'main' };
+}
+
+function publishPublic_(settings, props, expectedRevision) {
+  const token = props.getProperty('GITHUB_TIMETABLE_TOKEN');
+  if (!token) throw new Error('GITHUB_TOKEN_REQUIRED');
+  const preview = publicPreview_(settings, props);
+  if (preview.revision !== expectedRevision) throw new Error('PUBLIC_PREVIEW_CHANGED');
+  const branch = preview.branch;
+  const url = 'https://api.github.com/repos/Jinoo83S/HIS-Finder/contents/timetable.json';
+  const headers = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json' };
+  const get = UrlFetchApp.fetch(url + '?ref=' + encodeURIComponent(branch), { headers, muteHttpExceptions: true });
+  const code = get.getResponseCode();
+  if (code !== 200 && code !== 404) throw new Error('GITHUB_PUBLISH_FAILED');
+  const content = Utilities.base64Encode(JSON.stringify(preview.data, null, 2) + '\n', Utilities.Charset.UTF_8);
+  const existing = code === 200 ? JSON.parse(get.getContentText()) : null;
+  if (existing?.content?.replace(/\s/g, '') === content) return { count: preview.data.slots.length, unchanged: true };
+  const saved = UrlFetchApp.fetch(url, { method: 'put', contentType: 'application/json', headers, muteHttpExceptions: true,
+    payload: JSON.stringify({ branch, content, sha: existing?.sha, message: 'Publish public class timetable ' + settings.term }) });
+  if (![200, 201].includes(saved.getResponseCode())) throw new Error('GITHUB_PUBLISH_FAILED');
+  return { count: preview.data.slots.length, branch };
 }
 
 const HEADERS = {
