@@ -11,15 +11,15 @@
     <section class="gate-card">
       <div class="brand-mark">HIS</div>
       <h1 id="title">학생 빠른 찾기</h1>
-      <p id="status" class="muted" role="status">학교용 웹 앱 주소를 연결하는 중입니다.</p>
-      <p><a id="launch" class="button primary" hidden>학생 검색 열기</a></p>
+      <p id="status" class="muted" role="status">학교 계정으로 웹 앱을 열어 주세요.</p>
+      <p><a id="launch" class="button primary" href="https://script.google.com/a/macros/his.sc.kr/s/AKfycbzzs2qvIUDZnr2gIxVwELEDkHRdLPbjWhj-rmNYE4gr6wgwCW4eGNe9DM89qC2PCJVHYQ/exec">학생 검색 열기</a></p>
       <button id="language" class="button primary" type="button">English</button>
     </section>
   </main>
   <script src="./web-app-url.js?v=2099dd1"></script>
   <script>
     const launch = document.getElementById('launch');
-    const url = window.HIS_FINDER_WEB_APP_URL || '';
+    const url = window.HIS_FINDER_WEB_APP_URL || launch.href;
     const ready = /^https:\/\/script\.google\.com\/(?:a\/[^/]+\/)?macros\/s\/[\w-]+\/exec$/.test(url);
     let english = false;
     if (ready) { launch.href = url; launch.hidden = false; }
