@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+import { initLanguage } from "./i18n.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBeSyJY2pET002knu7KWKuqV-Nkhy7OEHQ",
@@ -18,10 +18,9 @@ const DEFAULT_SOURCES = {
   health: "https://docs.google.com/spreadsheets/d/1Y1thlOAf9BGjXKbG3jL6CBLVkpuyeSiw9wS62Y6lYTE/edit?gid=974283698#gid=974283698"
 };
 const auth = getAuth(initializeApp(firebaseConfig));
-const db = getFirestore();
 const provider = new GoogleAuthProvider();
 provider.setCustomParameters({ hd: DOMAIN });
-const settingsRef = doc(db, "adminSettings", "studentFinder");
+const t = initLanguage("adminPageTitle");
 const gate = document.querySelector("#gate");
 const app = document.querySelector("#app");
 const gateError = document.querySelector("#gate-error");
@@ -30,9 +29,9 @@ let savedSources = {};
 
 document.querySelector("#login-button").addEventListener("click", async (event) => {
   event.currentTarget.disabled = true;
-  gateError.textContent = "로그인 중입니다…";
+  gateError.textContent = t("adminSigningIn");
   try { await signInWithPopup(auth, provider); }
-  catch (error) { console.error(error); gateError.textContent = "로그인하지 못했습니다. 학교 계정을 확인해 주세요."; }
+  catch (error) { console.error(error); gateError.textContent = t("adminLoginFailed"); }
   finally { event.currentTarget.disabled = false; }
 });
 document.querySelector("#logout-button").addEventListener("click", () => signOut(auth));
@@ -42,14 +41,13 @@ onAuthStateChanged(auth, async (user) => {
   if (!user) { gate.hidden = false; return; }
   if (!user.email || user.email.toLowerCase().split("@").pop() !== DOMAIN) {
     await signOut(auth);
-    gateError.textContent = "@his.sc.kr 계정으로 로그인해 주세요.";
+    gateError.textContent = t("adminDomainOnly");
     return;
   }
   try {
-    const staffSnapshot = await getDoc(doc(db, "staff", user.email));
-    if (!staffSnapshot.exists() || staffSnapshot.data().role !== "admin") {
+    if (user.email.toLowerCase() !== "jinwoosuk@his.sc.kr") {
       await signOut(auth);
-      gateError.textContent = "관리자 권한이 등록된 계정만 사용할 수 있습니다.";
+      gateError.textContent = t("adminOnly");
       return;
     }
     document.querySelector("#account-email").textContent = user.email;
@@ -59,23 +57,21 @@ onAuthStateChanged(auth, async (user) => {
   } catch (error) {
     console.error(error);
     await signOut(auth);
-    gateError.textContent = "관리자 권한을 확인하지 못했습니다.";
+    gateError.textContent = t("adminCheckFailed");
   }
 });
 
 async function loadSettings() {
-  const snapshot = await getDoc(settingsRef);
-  const sources = snapshot.exists() ? snapshot.data().sources || {} : {};
+  const response = await fetch(`${API_BASE}/admin/settings`, { headers: { Authorization: `Bearer ${await auth.currentUser.getIdToken()}`, Accept: "application/json" }, cache: "no-store" });
+  if (!response.ok) throw new Error(t("adminCheckFailed"));
+  const payload = await response.json();
+  const sources = payload.sources || {};
   savedSources = sources;
   for (const key of ["timetable", "attendance", "health"]) {
     document.querySelector(`#${key}-url`).value = sources[key]?.url || DEFAULT_SOURCES[key];
-    const last = sources[key]?.lastSyncedAt?.toDate?.();
-    const label = key === "health" ? "조회 시 최신 자료 사용" : "마지막 연동: ";
-    document.querySelector(`#${key}-meta`).textContent = key === "health"
-      ? last ? `마지막 새로고침: ${formatDate(last)}` : label
-      : last ? `마지막 연동: ${formatDate(last)}` : `${label}기록 없음`;
   }
-  document.querySelector("#admin-notice").textContent = "관리자 권한을 확인했습니다. 주소를 저장한 뒤 필요한 자료를 연동하세요.";
+  renderMeta();
+  document.querySelector("#admin-notice").textContent = t("adminReady");
   document.querySelector("#admin-notice").dataset.kind = "success";
 }
 
@@ -83,25 +79,30 @@ document.querySelector("#settings-form").addEventListener("submit", async (event
   event.preventDefault();
   const button = event.submitter;
   button.disabled = true;
-  setStatus("시트 주소를 저장하고 있습니다…");
+  setStatus(t("saving"));
   try {
     const sources = {};
     for (const key of ["timetable", "attendance", "health"]) {
       sources[key] = { ...(savedSources[key] || {}), url: document.querySelector(`#${key}-url`).value.trim() };
     }
-    await setDoc(settingsRef, { sources, updatedAt: serverTimestamp(), updatedBy: auth.currentUser.email }, { merge: true });
+    const response = await fetch(`${API_BASE}/admin/settings`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${await auth.currentUser.getIdToken()}`, "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ sources })
+    });
+    if (!response.ok) throw new Error(t("saveFailed"));
     savedSources = sources;
-    setStatus("시트 주소를 저장했습니다.", "success");
+    setStatus(t("saved"), "success");
   } catch (error) {
     console.error(error);
-    setStatus("저장하지 못했습니다. Firebase 관리자 권한과 보안 규칙을 확인해 주세요.", "error");
+    setStatus(t("saveFailed"), "error");
   } finally { button.disabled = false; }
 });
 
 document.querySelectorAll("[data-sync]").forEach((button) => button.addEventListener("click", async () => {
   const source = button.dataset.sync;
   button.disabled = true;
-  setStatus("자료를 연동하고 있습니다…");
+  setStatus(t("syncing"));
   try {
     const token = await auth.currentUser.getIdToken();
     const response = await fetch(`${API_BASE}/sync/${source}`, {
@@ -110,14 +111,29 @@ document.querySelectorAll("[data-sync]").forEach((button) => button.addEventList
       cache: "no-store"
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || (response.status === 404 ? "연동 서버가 아직 배포되지 않았습니다." : `연동 실패 (${response.status})`));
-    setStatus(result.message || "연동을 완료했습니다.", "success");
+    if (!response.ok) {
+      if (response.status === 404 || response.status === 501) throw new Error(t("apiNotDeployed"));
+      if (response.status === 409) throw new Error(t("alreadySynced"));
+      if (response.status === 401 || response.status === 403) throw new Error(t("syncAccessDenied"));
+      throw new Error(t("syncFailed"));
+    }
+    setStatus(source === "health" ? t("syncHealthDone", { count: result.rowCount }) : t("syncDone", { count: result.rowCount }), "success");
     await loadSettings();
   } catch (error) {
     console.error(error);
-    setStatus(error.message || "연동 서버에 연결하지 못했습니다.", "error");
+    setStatus(error.message || t("syncFailed"), "error");
   } finally { button.disabled = false; }
 }));
 
 function setStatus(message, kind = "") { status.textContent = message; status.className = `admin-status ${kind}`; }
-function formatDate(date) { return new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "medium", timeStyle: "short" }).format(date); }
+function renderMeta() {
+  for (const key of ["timetable", "attendance", "health"]) {
+    const value = savedSources[key]?.lastSyncedAt;
+    const last = value?.toDate?.() || (value ? new Date(value) : null);
+    document.querySelector(`#${key}-meta`).textContent = key === "health"
+      ? last ? t("lastRefresh", { date: formatDate(last) }) : t("healthLive")
+      : last ? t("lastSync", { date: formatDate(last) }) : t("noSync");
+  }
+}
+window.addEventListener("his-finder-language", renderMeta);
+function formatDate(date) { const locale = document.documentElement.lang === "en" ? "en-US" : "ko-KR"; return new Intl.DateTimeFormat(locale, { timeZone: "Asia/Seoul", dateStyle: "medium", timeStyle: "short" }).format(date); }
