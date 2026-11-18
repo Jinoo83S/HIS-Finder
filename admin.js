@@ -53,7 +53,13 @@ onAuthStateChanged(auth, async (user) => {
     document.querySelector("#account-email").textContent = user.email;
     gate.hidden = true;
     app.hidden = false;
-    await loadSettings();
+    try { await loadSettings(); }
+    catch (error) {
+      console.error(error);
+      for (const key of ["timetable", "attendance", "health"]) document.querySelector(`#${key}-url`).value = DEFAULT_SOURCES[key];
+      document.querySelector("#admin-notice").textContent = t("apiNotDeployed");
+      document.querySelector("#admin-notice").dataset.kind = "error";
+    }
   } catch (error) {
     console.error(error);
     await signOut(auth);
