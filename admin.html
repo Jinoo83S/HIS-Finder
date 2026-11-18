@@ -3,67 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#10253f">
-  <title>관리자 설정 | HIS 학생 빠른 찾기</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css">
-  <style>
-    .language-toggle{position:fixed;z-index:1100;right:20px;top:18px;background:#fff;color:#10253f;border:1px solid #d7dfe8}.account{padding-right:78px}
-    .admin-main{width:min(100% - 40px,920px);margin:0 auto;flex:1;padding-bottom:48px}.admin-intro{padding:38px 0 20px}.admin-intro h1{font-size:26px;margin:0 0 8px}.source-list{display:grid;gap:14px}.source-card{padding:20px;background:#fff;border:1px solid var(--line);border-radius:12px}.source-card h2{margin:0 0 6px;font-size:16px}.source-card .muted{margin:0 0 14px;font-size:12px}.source-card label{display:block;margin:12px 0 6px;font-size:12px;font-weight:700}.source-card input{width:100%;padding:10px 12px;border:1px solid #cfd7e1;border-radius:7px;font-size:13px}.source-meta{color:#758191;font-size:11px;margin-top:9px}.admin-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.admin-actions .button{font-size:12px;padding:9px 13px}.sync-button{background:#edf2f7;color:#284564;border:1px solid #d8e0e9}.sync-button:hover{background:#e2eaf2}.admin-status{margin:14px 0 0;font-size:12px;color:var(--muted);min-height:20px}.admin-status.error{color:#a44436}.admin-status.success{color:#287a58}.admin-note{margin:18px 0;padding:14px;border:1px solid #eadfcf;border-radius:9px;background:#fffaf2;color:#7d6038;font-size:12px;line-height:1.7}.back-link{color:#e1e7ef;font-size:12px;text-decoration:none}@media(max-width:680px){.admin-main{width:calc(100% - 28px)}.admin-intro{padding:28px 0 18px}.admin-intro h1{font-size:22px}.source-card{padding:16px}}
-  </style>
+  <meta http-equiv="refresh" content="0;url=./">
+  <title>HIS Finder</title>
 </head>
-<body>
-  <button id="language-toggle" class="button ghost language-toggle" type="button" aria-label="Change language">English</button>
-  <div id="gate" class="gate">
-    <div class="gate-card">
-      <div class="brand-mark">HIS</div>
-      <p class="eyebrow">ADMINISTRATION</p>
-      <h1 data-i18n="appName">학생 빠른 찾기</h1>
-      <p id="gate-message" class="muted" data-i18n="adminGateInfo">관리자 화면입니다. HIS 계정으로 로그인해 주세요.</p>
-      <button id="login-button" class="button primary" data-i18n="login">Google 계정으로 로그인</button>
-      <p id="gate-error" class="message" aria-live="polite"></p>
-    </div>
-  </div>
-
-  <div id="app" class="app-shell" hidden>
-    <header class="topbar">
-      <a class="brand" href="./"><span class="brand-mark small">HIS</span><span data-i18n="adminBrand">학생 빠른 찾기 · 관리자</span></a>
-      <div class="account"><a class="back-link" href="./" data-i18n="backToSearch">학생 검색</a><span id="account-email"></span><button id="logout-button" class="button ghost" data-i18n="logout">로그아웃</button></div>
-    </header>
-    <main class="admin-main">
-      <section class="admin-intro">
-        <p class="eyebrow">DATA SOURCE SETTINGS</p>
-        <h1 data-i18n="settingsTitle">시트 주소와 동기화 관리</h1>
-        <p class="muted" data-i18n="settingsIntro">시트 주소를 변경하고 자료별 동기화를 실행합니다. 주소와 동기화 기록은 관리자 전용 Firebase 설정에 저장됩니다.</p>
-      </section>
-      <div id="admin-notice" class="notice" role="status" aria-live="polite" data-i18n="checkingAdmin">설정 권한을 확인하고 있습니다.</div>
-      <form id="settings-form" class="source-list">
-        <section class="source-card">
-          <h2 data-i18n="timetable">시간표</h2><p class="muted" data-i18n="timetableDesc">학기당 한 번 동기화해 검색용 캐시로 사용합니다.</p>
-          <label for="timetable-url" data-i18n="sheetUrl">Google Sheets 주소</label><input id="timetable-url" data-i18n-placeholder="urlPlaceholder" type="url" inputmode="url" placeholder="https://docs.google.com/spreadsheets/d/..." required>
-          <p id="timetable-meta" class="source-meta" data-i18n="noSync">마지막 연동: 기록 없음</p>
-          <div class="admin-actions"><button class="button primary" type="submit" data-i18n="saveUrl">주소 저장</button><button class="button sync-button" type="button" data-sync="timetable" data-i18n="syncTimetable">시간표 지금 연동</button></div>
-        </section>
-        <section class="source-card">
-          <h2 data-i18n="attendanceSource">일일 출결</h2><p class="muted" data-i18n="attendanceDesc">당일 자료를 하루 한 번 갱신합니다.</p>
-          <label for="attendance-url" data-i18n="sheetUrl">Google Sheets 주소</label><input id="attendance-url" data-i18n-placeholder="urlPlaceholder" type="url" inputmode="url" placeholder="https://docs.google.com/spreadsheets/d/..." required>
-          <p id="attendance-meta" class="source-meta" data-i18n="noSync">마지막 연동: 기록 없음</p>
-          <div class="admin-actions"><button class="button primary" type="submit" data-i18n="saveUrl">주소 저장</button><button class="button sync-button" type="button" data-sync="attendance" data-i18n="syncAttendance">출결 지금 연동</button></div>
-        </section>
-        <section class="source-card">
-          <h2 data-i18n="health">보건실</h2><p class="muted" data-i18n="healthDesc">학생을 조회할 때 최신 자료를 가져옵니다.</p>
-          <label for="health-url" data-i18n="sheetUrl">Google Sheets 주소</label><input id="health-url" data-i18n-placeholder="urlPlaceholder" type="url" inputmode="url" placeholder="https://docs.google.com/spreadsheets/d/..." required>
-          <p id="health-meta" class="source-meta" data-i18n="healthLive">조회 시 최신 자료 사용</p>
-          <div class="admin-actions"><button class="button primary" type="submit" data-i18n="saveUrl">주소 저장</button><button class="button sync-button" type="button" data-sync="health" data-i18n="refreshHealth">보건실 자료 새로고침</button></div>
-        </section>
-      </form>
-      <div id="action-status" class="admin-status" aria-live="polite"></div>
-      <aside class="admin-note" data-i18n="adminNote">동기화 API 배포 후 주소 저장과 자료 연동 기능을 사용할 수 있습니다. 학생 자료는 GitHub 파일에 저장하지 않고, 권한이 적용되는 Firebase 저장소를 사용합니다.</aside>
-    </main>
-    <footer><span data-i18n="schoolName">Handong International School</span><span data-i18n="adminAudit">관리자 설정 변경은 기록됩니다.</span></footer>
-  </div>
-  <script type="module" src="./admin.js"></script>
-</body>
+<body><a href="./">HIS Finder · 학생 검색</a></body>
 </html>
