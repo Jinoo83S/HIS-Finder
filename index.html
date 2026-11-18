@@ -16,19 +16,13 @@
       <button id="language" class="button primary" type="button">English</button>
     </section>
   </main>
-  <script src="./web-app-url.js?v=2099dd1"></script>
   <script>
     const launch = document.getElementById('launch');
-    const url = window.HIS_FINDER_WEB_APP_URL || launch.href;
-    const ready = /^https:\/\/script\.google\.com\/(?:a\/[^/]+\/)?macros\/s\/[\w-]+\/exec$/.test(url);
     let english = false;
-    if (ready) { launch.href = url; launch.hidden = false; }
     function render() {
       document.documentElement.lang = english ? 'en' : 'ko';
       document.getElementById('title').textContent = english ? 'Find a student' : '학생 빠른 찾기';
-      document.getElementById('status').textContent = ready
-        ? (english ? 'Open the web app with your school account.' : '학교 계정으로 웹 앱을 열어 주세요.')
-        : (english ? 'The school web app link has not been set yet.' : '학교용 웹 앱 주소 설정이 아직 완료되지 않았습니다.');
+      document.getElementById('status').textContent = english ? 'Open the web app with your school account.' : '학교 계정으로 웹 앱을 열어 주세요.';
       launch.textContent = english ? 'Open HIS Finder' : '학생 검색 열기';
       document.getElementById('language').textContent = english ? '한국어' : 'English';
     }
