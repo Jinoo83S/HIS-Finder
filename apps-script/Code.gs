@@ -1,232 +1,449 @@
-const ADMIN = 'jinwoosuk@his.sc.kr';
-const TZ = 'Asia/Seoul';
-const DEFAULTS = {
-  timetable: 'https://docs.google.com/spreadsheets/d/1yw-l67mV2t4ZynqjTgmQ1uTp0MPRc_dd2gPEL7QXVdg/edit?gid=1631354026',
-  attendance: 'https://docs.google.com/spreadsheets/d/1MfqOPPHc0BacimghJEGw8Ba1r_pN9Z4POTAEJu4ymM0/edit?gid=1507799363',
-  health: 'https://docs.google.com/spreadsheets/d/1Y1thlOAf9BGjXKbG3jL6CBLVkpuyeSiw9wS62Y6lYTE/edit?gid=974283698'
-};
-const FIELDS = {
-  id: ['학번', '학생ID', 'Student ID', 'SID'],
-  name: ['이름', '학생명', '성명', 'Name', 'Student Name', '학생 이름'],
-  grade: ['학년', 'Grade'], room: ['반', '학급', 'Class', 'Homeroom'],
-  number: ['번호', '출석번호', 'Number', 'Student Number'],
-  date: ['날짜', '일자', 'Date', 'Timestamp', '타임스탬프', '방문일', '출결일', '방문일시', '방문 날짜'],
-  status: ['출결', '출결구분', '출결상태', '구분', 'Status', 'Attendance', 'Attendance Status'],
-  day: ['요일', 'Day', 'Weekday'], period: ['교시', 'Period'],
-  subject: ['과목', '교과', 'Subject', 'Course'], location: ['교실', '강의실', 'Room', 'Location']
-};
+const PROJECT = 'his-main';
+const ZONE = 'Asia/Seoul';
+const CACHE_SECONDS = 60;
+const SOURCE_KEYS = ['courses', 'schedule', 'attendance', 'clinic'];
 
 function doGet() {
-  return HtmlService.createHtmlOutputFromFile('Index').setTitle('HIS Finder')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  return json_({ service: 'HIS Finder', version: 1 });
 }
 
-function account() {
-  const email = Session.getActiveUser().getEmail().trim().toLowerCase();
-  if (!/^[^@]+@his\.sc\.kr$/.test(email)) throw new Error('SCHOOL_ACCOUNT_REQUIRED');
-  return { email, admin: email === ADMIN };
-}
-
-function settings() {
-  admin_();
-  return Object.keys(DEFAULTS).map(key => ({ key, ...source_(key) }));
-}
-
-function saveSource(key, url) {
-  admin_();
-  return locked_(() => {
-    parseUrl_(url);
-    const source = source_(key);
-    if (source.url !== url) {
-      const store = PropertiesService.getScriptProperties();
-      store.setProperty('url:' + key, url);
-      store.deleteProperty('snapshot:' + key);
-      discard_(source.tab);
-    }
-    return settings();
-  });
-}
-
-function syncSource(key) {
-  admin_();
-  return locked_(() => {
-    const rows = sync_(key);
-    return { count: rows.length, sources: settings() };
-  });
-}
-
-function installAttendanceTrigger() {
-  admin_();
-  return locked_(() => {
-    if (!ScriptApp.getProjectTriggers().some(trigger => trigger.getHandlerFunction() === 'dailyAttendance_')) {
-      ScriptApp.newTrigger('dailyAttendance_').timeBased().everyDays(1).atHour(7).inTimezone(TZ).create();
-    }
-    return true;
-  });
-}
-
-function dailyAttendance_() {
-  locked_(() => day_() === source_('attendance').day ? null : sync_('attendance'));
-}
-
-function searchStudents(query) {
-  account();
-  const q = norm_(String(query || '').slice(0, 80));
-  if (!q) return { students: [], unavailable: [] };
-  const unavailable = [];
-  const datasets = {};
-  for (const key of Object.keys(DEFAULTS)) {
-    try {
-      datasets[key] = key === 'health' ? readSource_(key) : locked_(() => {
-        const source = source_(key);
-        if (key === 'attendance' && source.day !== day_()) return sync_(key);
-        if (!source.tab) throw new Error('SYNC_REQUIRED');
-        const tab = cacheBook_().getSheetByName(source.tab);
-        if (!tab) throw new Error('SYNC_REQUIRED');
-        return tab.getLastRow() ? tab.getRange(1, 1, tab.getLastRow(), 1).getValues().map(row => JSON.parse(row[0])) : [];
-      });
-    } catch (_) {
-      unavailable.push(key);
-      datasets[key] = [];
-    }
-  }
-  const roster = [...datasets.timetable, ...datasets.attendance, ...datasets.health];
-  const idsByClassNumber = new Map();
-  for (const row of roster) {
-    if (!row.id || !row.classNumber) continue;
-    if (!idsByClassNumber.has(row.classNumber)) idsByClassNumber.set(row.classNumber, new Set());
-    idsByClassNumber.get(row.classNumber).add(row.id);
-  }
-  const groups = new Map();
-  Object.keys(datasets).forEach(key => datasets[key].forEach(row => {
-    const ids = idsByClassNumber.get(row.classNumber);
-    const identity = row.id ? 'id:' + row.id : ids?.size === 1 ? 'id:' + [...ids][0]
-      : row.classNumber && !ids ? 'class:' + row.classNumber : null;
-    if (!identity) return;
-    if (!groups.has(identity)) groups.set(identity, {
-      name: row.name, grade: row.grade, class: row.room, number: row.number, id: row.id,
-      timetable: [], attendance: [], health: []
-    });
-    const student = groups.get(identity);
-    for (const [field, value] of Object.entries({ name: row.name, grade: row.grade, class: row.room, number: row.number, id: row.id })) {
-      if (!student[field]) student[field] = value;
-    }
-    if (row.detail && !student[key].includes(row.detail)) student[key].push(row.detail);
-  }));
-  const students = [...groups.values()].filter(student => {
-    const fields = [student.name, student.id, student.number, student.grade + '학년',
-      'Grade ' + student.grade, student.grade + '-' + student.class, student.class + '반'];
-    return fields.some(value => norm_(value).includes(q));
-  }).slice(0, 50).map(({ id, ...student }) => student);
-  return { students, unavailable };
-}
-
-function admin_() {
-  if (!account().admin) throw new Error('ADMIN_REQUIRED');
-}
-
-function source_(key) {
-  if (!Object.prototype.hasOwnProperty.call(DEFAULTS, key)) throw new Error('UNKNOWN_SOURCE');
-  const props = PropertiesService.getScriptProperties();
-  return { ...JSON.parse(props.getProperty('snapshot:' + key) || '{}'), url: props.getProperty('url:' + key) || DEFAULTS[key] };
-}
-
-function parseUrl_(url) {
-  const match = /^https:\/\/docs\.google\.com\/spreadsheets\/d\/([\w-]+)(?:\/[^?#]*)?(?:[?#].*)?$/.exec(String(url));
-  const tab = /[?#&]gid=(\d+)(?:[&#]|$)/.exec(String(url));
-  if (!match || !tab) throw new Error('INVALID_SHEET_URL');
-  return { id: match[1], gid: Number(tab[1]) };
-}
-
-function readSource_(key) {
-  const { id, gid } = parseUrl_(source_(key).url);
-  const tab = SpreadsheetApp.openById(id).getSheets().find(sheet => sheet.getSheetId() === gid);
-  if (!tab) throw new Error('TAB_NOT_FOUND');
-  const values = tab.getDataRange().getValues();
-  const display = tab.getDataRange().getDisplayValues();
-  const header = display.findIndex(row => hasField_(row, 'name') && (hasField_(row, 'id') ||
-    ['grade', 'room', 'number'].every(field => hasField_(row, field))));
-  if (header < 0) throw new Error('STUDENT_COLUMNS_NOT_FOUND');
-  const columns = Object.fromEntries(Object.keys(FIELDS).map(field =>
-    [field, display[header].findIndex(value => FIELDS[field].some(alias => norm_(alias) === norm_(value)))]));
-  if (key === 'attendance' && columns.status < 0) throw new Error('ATTENDANCE_STATUS_COLUMN_REQUIRED');
-  if (key === 'health' && columns.date < 0) throw new Error('HEALTH_DATE_COLUMN_REQUIRED');
-  const rows = [];
-  for (let i = header + 1; i < display.length; i++) {
-    const row = display[i];
-    const get = field => String(row[columns[field]] || '').trim();
-    const [name, id, grade, room, number] = ['name', 'id', 'grade', 'room', 'number'].map(get);
-    const classNumber = grade && room && number ? JSON.stringify([norm_(grade), norm_(room), norm_(number)]) : '';
-    if (!name || (!id && !classNumber)) continue;
-    if (key !== 'timetable' && columns.date >= 0 && dateKey_(values[i][columns.date]) !== day_()) continue;
-    const detail = key === 'health' ? 'VISIT_TODAY' : key === 'attendance' ? get('status') :
-      ['day', 'period', 'subject', 'location'].map(get).filter(Boolean).join(' · ');
-    rows.push({ name, id: id.normalize('NFKC').toLowerCase(), grade, room, number, classNumber, detail });
-  }
-  return rows;
-}
-
-function sync_(key) {
-  const current = source_(key);
-  const rows = readSource_(key);
-  const props = PropertiesService.getScriptProperties();
-  const meta = { day: day_(), lastSync: new Date().toISOString() };
-  if (key === 'health') {
-    props.setProperty('snapshot:' + key, JSON.stringify(meta));
-    return rows;
-  }
-  const book = cacheBook_();
-  const tab = book.insertSheet(key + '_' + Utilities.getUuid());
+function doPost(e) {
   try {
-    if (rows.length) tab.getRange(1, 1, rows.length, 1).setValues(rows.map(row => [JSON.stringify(row)]));
-    SpreadsheetApp.flush();
-    props.setProperty('snapshot:' + key, JSON.stringify({ ...meta, tab: tab.getName() }));
+    const body = e && e.postData && e.postData.contents;
+    if (!body || body.length > 18000) throw new Error('BAD_REQUEST');
+    const request = JSON.parse(body);
+    const props = PropertiesService.getScriptProperties();
+    const apiKey = props.getProperty('FIREBASE_WEB_API_KEY');
+    if (!apiKey) throw new Error('SETUP_REQUIRED');
+    if (request.action === 'config') return json_({ data: {
+      apiKey, authDomain: PROJECT + '.firebaseapp.com', projectId: PROJECT,
+      appId: '1:311279275648:web:3609db730ec2b0e77ea065'
+    } });
+    const account = authenticate_(request.token, props.getProperty('FIREBASE_LOOKUP_API_KEY') || apiKey, props);
+    return json_({ data: dispatch_(request, account, props) });
   } catch (error) {
-    book.deleteSheet(tab);
+    const message = String(error.message);
+    if (!/^[A-Z][A-Z0-9_]{1,70}$/.test(message)) console.error(error.name);
+    return json_({ error: /^[A-Z][A-Z0-9_]{1,70}$/.test(message) ? message : 'SERVER_ERROR' });
+  }
+}
+
+function json_(body) {
+  return ContentService.createTextOutput(JSON.stringify(body)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function authenticate_(token, apiKey, props) {
+  if (typeof token !== 'string' || token.length > 6000) throw new Error('AUTH_REQUIRED');
+  const parts = token.split('.');
+  let claims;
+  try {
+    claims = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[1])).getDataAsString());
+  } catch (_) { throw new Error('AUTH_REQUIRED'); }
+  if (claims.aud !== PROJECT || claims.iss !== 'https://securetoken.google.com/' + PROJECT ||
+      claims.firebase?.sign_in_provider !== 'google.com' || !(claims.exp > Date.now() / 1000)) {
+    throw new Error('AUTH_REQUIRED');
+  }
+  const response = UrlFetchApp.fetch('https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=' + encodeURIComponent(apiKey), {
+    method: 'post', contentType: 'application/json', payload: JSON.stringify({ idToken: token }),
+    muteHttpExceptions: true
+  });
+  if (response.getResponseCode() === 429 || response.getResponseCode() >= 500) throw new Error('AUTH_UNAVAILABLE');
+  if (response.getResponseCode() !== 200) throw new Error('AUTH_REQUIRED');
+  const user = JSON.parse(response.getContentText()).users?.[0];
+  const email = clean_(user?.email).toLowerCase();
+  if (!user || user.localId !== claims.sub || user.disabled || !user.emailVerified ||
+      clean_(claims.email).toLowerCase() !== email || !/^[^@\s]+@his\.sc\.kr$/.test(email)) {
+    throw new Error('AUTH_REQUIRED');
+  }
+  return { admin: email === clean_(props.getProperty('ADMIN_EMAIL')).toLowerCase() };
+}
+
+function dispatch_(request, account, props) {
+  const settings = settings_(props);
+  switch (request.action) {
+    case 'session':
+      return { admin: account.admin, profiles: settings.profiles, overrides: settings.overrides };
+    case 'search': {
+      const query = clean_(request.query).toLowerCase().replace(/\s/g, '');
+      if (query.length < 2 || query.length > 80) throw new Error('BAD_QUERY');
+      return snapshot_(props).students.filter(student => student.names.some(name =>
+        name.toLowerCase().replace(/\s/g, '').includes(query)
+      )).slice(0, 40).map(({ id, name, grade, group, number }) => ({ id, name, grade, group, number }));
+    }
+    case 'student': {
+      const snapshot = snapshot_(props);
+      const student = snapshot.students.find(item => item.id === request.id);
+      if (!student) throw new Error('STUDENT_NOT_FOUND');
+      return { lessons: student.lessons, snapshotAt: snapshot.at, term: snapshot.term,
+        ...live_(student, snapshot.students, settings, request.force === true) };
+    }
+    case 'live': {
+      const snapshot = snapshot_(props);
+      const student = snapshot.students.find(item => item.id === request.id);
+      if (!student) throw new Error('STUDENT_NOT_FOUND');
+      return live_(student, snapshot.students, settings, request.force === true);
+    }
+    default:
+      if (!account.admin) throw new Error('ADMIN_REQUIRED');
+      if (request.action === 'settings') return { ...settings, snapshot: snapshotInfo_(props) };
+      if (request.action === 'save') return locked_(() => {
+        const validated = validateSettings_(request.settings);
+        props.setProperty('SETTINGS', JSON.stringify(validated));
+        return { ...validated, snapshot: snapshotInfo_(props) };
+      });
+      if (request.action === 'sync') return locked_(() => sync_(props, settings_(props)));
+      if (request.action === 'inspect') return inspect_(validateSettings_(request.settings).sources);
+      throw new Error('BAD_REQUEST');
+  }
+}
+
+function clean_(value) { return String(value ?? '').normalize('NFKC').trim(); }
+
+function dayKey_(value) {
+  const text = clean_(value);
+  const iso = text.match(/^(20\d{2})\s*[-./년]\s*(\d{1,2})\s*[-./월]\s*(\d{1,2})(?:\D|$)/);
+  const us = text.match(/^(\d{1,2})\/(\d{1,2})\/(20\d{2})(?:\D|$)/);
+  if (!iso && !us) return '';
+  const [year, month, day] = iso ? iso.slice(1) : [us[3], us[1], us[2]];
+  const date = new Date(Date.UTC(+year, +month - 1, +day));
+  return date.getUTCMonth() === +month - 1 && date.getUTCDate() === +day
+    ? date.toISOString().slice(0, 10) : '';
+}
+
+function defaultProfiles_() {
+  const regular = ['08:30-08:50', '09:00-09:50', '10:00-10:50', '11:00-11:50',
+    '12:00-12:50', '13:30-14:20', '14:30-15:20', '15:30-16:20', '12:50-13:30'];
+  const high = [...regular];
+  high[4] = '12:30-13:20';
+  high[8] = '11:50-12:30';
+  const friday = times => times.map((time, i) =>
+    i === 6 ? '14:25-15:15' : i === 7 ? '15:20-16:10' : time);
+  const short = ['08:30-08:45', '08:50-09:30', '09:40-10:20', '10:30-11:10',
+    '11:20-12:00', '12:10-12:50', '13:30-14:10', '', '12:50-13:30'];
+  const shortHigh = [...short];
+  shortHigh[5] = '12:40-13:20';
+  shortHigh[8] = '12:00-12:40';
+  return {
+    middleRegular: regular, highRegular: high, middleFriday: friday(regular), highFriday: friday(high),
+    middleShort: short, highShort: shortHigh
+  };
+}
+
+function settings_(props) {
+  const saved = props.getProperty('SETTINGS');
+  if (saved) return JSON.parse(saved);
+  const urls = JSON.parse(props.getProperty('SOURCE_URLS') || '{}');
+  const sources = Object.fromEntries(SOURCE_KEYS.map(key => [key, {
+    url: urls[key] || '', tab: key === 'courses' ? 'Raw_Cou' : key === 'schedule' ? '시간표_Data' : '',
+    header: 1, mode: 'rows', columns: ''
+  }]));
+  return { sources, term: '', profiles: defaultProfiles_(), overrides: '' };
+}
+
+function parseSourceUrl_(url) {
+  const match = clean_(url).match(/^https:\/\/docs\.google\.com\/spreadsheets\/d\/([\w-]+)(?:[/?#][^\s]*)?$/);
+  if (!match) throw new Error('BAD_SHEET_URL');
+  return { id: match[1], gid: url.match(/[?#&]gid=(\d+)/)?.[1] };
+}
+
+function validateSettings_(input) {
+  if (!input || typeof input !== 'object') throw new Error('BAD_SETTINGS');
+  const term = clean_(input.term);
+  if (term && !/^20\d{2}-[12]$/.test(term)) throw new Error('BAD_TERM');
+  const sources = Object.fromEntries(SOURCE_KEYS.map(key => {
+    const source = input.sources?.[key] || {};
+    const url = clean_(source.url);
+    if (url) parseSourceUrl_(url);
+    const header = Number(source.header);
+    const tab = clean_(source.tab);
+    const columns = clean_(source.columns).toUpperCase();
+    const allowed = ['name','grade','group','number','date','status','period','time'];
+    if (!Number.isInteger(header) || header < 1 || header > 100 || tab.length > 100 ||
+        columns.length > 140 || (columns && columns.split(',').some(part => {
+          const match = part.trim().match(/^([A-Z]+)\s*=\s*([A-Z]{1,3})$/);
+          return !match || !allowed.includes(match[1].toLowerCase());
+        }))) throw new Error('BAD_SETTINGS');
+    return [key, { url, tab, header, mode: key === 'attendance' && source.mode === 'grid' ? 'grid' : 'rows', columns }];
+  }));
+  const profiles = Object.fromEntries(Object.keys(defaultProfiles_()).map(key => {
+    const slots = input.profiles?.[key];
+    if (!Array.isArray(slots) || slots.length !== 9) throw new Error('BAD_PERIODS');
+    const values = slots.map(clean_);
+    const ranges = values.filter(Boolean).map(value => {
+      if (!/^(?:[01]\d|2[0-3]):[0-5]\d-(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) throw new Error('BAD_PERIODS');
+      const [start, end] = value.split('-');
+      if (start >= end) throw new Error('BAD_PERIODS');
+      return [start, end];
+    }).sort((a, b) => a[0].localeCompare(b[0]));
+    if (ranges.some((range, i) => i > 0 && ranges[i - 1][1] > range[0])) throw new Error('OVERLAPPING_PERIODS');
+    return [key, values];
+  }));
+  const overrides = clean_(input.overrides);
+  const dates = overrides ? overrides.split(/[\s,]+/) : [];
+  if (dates.length > 120 || dates.some(date => dayKey_(date) !== date)) throw new Error('BAD_SHORT_DATES');
+  return { sources, term, profiles, overrides: [...new Set(dates)].join(', ') };
+}
+
+function sheet_(source, key) {
+  const tag = key.toUpperCase();
+  if (!source.url) throw new Error(tag + '_SOURCE_REQUIRED');
+  const location = parseSourceUrl_(source.url);
+  try {
+    const book = SpreadsheetApp.openById(location.id);
+    const sheet = source.tab ? book.getSheetByName(source.tab)
+      : book.getSheets().find(tab => String(tab.getSheetId()) === location.gid);
+    if (!sheet) throw new Error(tag + '_TAB_MISSING');
+    return sheet;
+  } catch (error) {
+    if (error.message === tag + '_TAB_MISSING') throw error;
+    throw new Error(tag + '_SOURCE_UNAVAILABLE');
+  }
+}
+
+function inspect_(sources) {
+  return Object.fromEntries(SOURCE_KEYS.map(key => {
+    try {
+      const source = sources[key];
+      const loc = parseSourceUrl_(source.url);
+      const book = SpreadsheetApp.openById(loc.id);
+      const tabs = book.getSheets().map(tab => ({ name: tab.getName(), gid: tab.getSheetId() }));
+      let sheet;
+      try { sheet = sheet_(source, key); } catch (error) { return [key, { tabs, error: error.message }]; }
+      const width = Math.min(sheet.getLastColumn(), 100);
+      const headers = width ? sheet.getRange(source.header, 1, 1, width).getDisplayValues()[0] : [];
+      return [key, { tabs, headers, layout: source.mode === 'grid' ? 'grid' : key === 'attendance' || key === 'clinic' ? 'rows' : 'fixed' }];
+    } catch (_) { return [key, { error: key.toUpperCase() + '_SOURCE_UNAVAILABLE' }]; }
+  }));
+}
+
+function locked_(work) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) throw new Error('BUSY');
+  try { return work(); } finally { lock.releaseLock(); }
+}
+
+function table_(source, key) {
+  const sheet = sheet_(source, key);
+  const height = sheet.getLastRow() - source.header + 1;
+  const width = sheet.getLastColumn();
+  if (height < 1 || width < 1) throw new Error(key.toUpperCase() + '_LAYOUT_UNKNOWN');
+  const [headers, ...rows] = sheet.getRange(source.header, 1, height, width).getDisplayValues();
+  return { headers, rows };
+}
+
+function digest_(text) {
+  return Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text))
+    .replace(/=+$/, '');
+}
+
+function norm_(value) { return clean_(value).toLowerCase().replace(/\s+/g, ''); }
+function grade_(value) { return clean_(value).match(/^(?:G\s*)?(7|8|9|10|11|12)(?:학년|\s*grade)?$/i)?.[1] || ''; }
+function group_(value) { return clean_(value).toUpperCase().replace(/\s/g, '').replace(/반$/, ''); }
+function number_(value) { return clean_(value).replace(/번$/, '').replace(/^0+(?=\d)/, ''); }
+function period_(value) {
+  const text = norm_(value);
+  if (['hr', 'homeroom', '조회', '홈룸'].includes(text)) return 'HR';
+  if (['lunch', '점심', '점심시간', '중식'].includes(text)) return 'Lunch';
+  return text.match(/^([1-7])(?:교시|p)?$/)?.[1] || '';
+}
+
+function weekday_(value) {
+  const days = ['월','화','수','목','금'];
+  const en = ['mon','tue','wed','thu','fri'];
+  const text = norm_(value);
+  const ko = days.indexOf(text.replace(/요일$/, ''));
+  if (ko >= 0) return days[ko];
+  const english = en.indexOf(text.slice(0, 3));
+  return english >= 0 ? days[english] : '';
+}
+
+function buildStudents_(courseRows, scheduleRows) {
+  const roster = new Map();
+  for (const row of courseRows) {
+    const name = clean_(row[0]);
+    const grade = grade_(row[1]);
+    const group = group_(row[2]);
+    const number = number_(row[9]);
+    if (!name || !grade || !group) continue;
+    const key = JSON.stringify([grade, group, number, norm_(name)]);
+    if (!roster.has(key)) roster.set(key, { id: digest_(key).slice(0, 22), name, names: [name],
+      grade, group, number, courses: new Map(), lessons: {} });
+    const code = clean_(row[16]);
+    if (code) roster.get(key).courses.set(code, { ko: clean_(row[10]) || clean_(row[12]),
+      en: clean_(row[11]) || clean_(row[13]) });
+  }
+  const slots = new Map();
+  for (const row of scheduleRows) {
+    const grade = grade_(row[0]);
+    const group = group_(row[1]);
+    const day = weekday_(row[2]);
+    const period = period_(row[3]);
+    const code = clean_(row[4]);
+    if (!grade || !group || !day || !period || !code) continue;
+    const groupKey = grade + ':' + group;
+    if (!slots.has(groupKey)) slots.set(groupKey, new Map());
+    const groupSlots = slots.get(groupKey);
+    const key = day + ':' + period;
+    if (!groupSlots.has(key)) groupSlots.set(key, []);
+    const lessons = groupSlots.get(key);
+    const room = [clean_(row[6]), clean_(row[8])].filter(Boolean);
+    const lesson = { code, teacher: clean_(row[5]), room: [...new Set(room)].join(' / ') };
+    if (!lessons.some(item => item.code === code && item.room === lesson.room && item.teacher === lesson.teacher)) lessons.push(lesson);
+  }
+  if (!roster.size) throw new Error('COURSES_LAYOUT_UNKNOWN');
+  if (!slots.size) throw new Error('SCHEDULE_LAYOUT_UNKNOWN');
+  let populated = 0;
+  const students = Array.from(roster.values(), ({ courses, ...student }) => {
+    const groupSlots = slots.get(student.grade + ':' + student.group) || [];
+    for (const [key, choices] of groupSlots) {
+      const matches = choices.length === 1 ? choices : choices.filter(lesson => courses.has(lesson.code));
+      if (matches.length !== 1) {
+        student.lessons[key] = { unresolved: true };
+        continue;
+      }
+      const lesson = matches[0];
+      const names = courses.get(lesson.code) || {};
+      student.lessons[key] = { ...lesson, ko: names.ko || names.en || lesson.code, en: names.en || names.ko || lesson.code };
+      populated++;
+    }
+    return student;
+  });
+  if (!populated) throw new Error('NO_MATCHING_TIMETABLES');
+  return students.sort((a, b) => a.grade - b.grade || a.group.localeCompare(b.group) ||
+    Number(a.number) - Number(b.number) || a.name.localeCompare(b.name, 'ko'));
+}
+
+function snapshotInfo_(props) {
+  return JSON.parse(props.getProperty('SNAPSHOT') || 'null');
+}
+
+function sync_(props, settings) {
+  if (!settings.term) throw new Error('TERM_REQUIRED');
+  const students = buildStudents_(table_(settings.sources.courses, 'courses').rows,
+    table_(settings.sources.schedule, 'schedule').rows);
+  const previous = snapshotInfo_(props);
+  let bookId = props.getProperty('SNAPSHOT_BOOK');
+  if (!bookId) {
+    bookId = SpreadsheetApp.create('HIS Finder · 비공개 시간표 캐시').getId();
+    props.setProperty('SNAPSHOT_BOOK', bookId);
+  }
+  const book = SpreadsheetApp.openById(bookId);
+  const tab = book.insertSheet('snapshot_' + Date.now());
+  const at = new Date().toISOString();
+  const payload = JSON.stringify({ at, term: settings.term, students });
+  const zipped = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(payload)).getBytes());
+  const chunks = zipped.match(/.{1,30000}/g).map(chunk => ['b:' + chunk]);
+  const info = { tab: tab.getName(), term: settings.term, at, count: students.length };
+  try {
+    tab.getRange(1, 1, chunks.length, 1).setValues(chunks);
+    SpreadsheetApp.flush();
+    props.setProperty('SNAPSHOT', JSON.stringify(info));
+  } catch (error) {
+    try { book.deleteSheet(tab); } catch (_) {}
     throw error;
   }
-  discard_(current.tab);
-  return rows;
-}
-
-function cacheBook_() {
-  const props = PropertiesService.getScriptProperties();
-  const id = props.getProperty('cacheBook');
-  if (id) return SpreadsheetApp.openById(id);
-  const book = SpreadsheetApp.create('HIS Finder – Private cache');
-  props.setProperty('cacheBook', book.getId());
-  return book;
-}
-
-function discard_(name) {
-  if (!name) return;
+  // Keep the preceding snapshot available to readers that started just before this refresh.
   try {
-    const book = cacheBook_();
-    const tab = book.getSheetByName(name);
-    if (tab) book.deleteSheet(tab);
-  } catch (_) { console.warn('Could not remove previous cache tab'); }
+    for (const old of book.getSheets()) {
+      if (old.getName().startsWith('snapshot_') && old.getName() !== info.tab &&
+          old.getName() !== previous?.tab) book.deleteSheet(old);
+    }
+  } catch (_) {}
+  return info;
 }
 
-function locked_(run) {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(25000);
-  try { return run(); } finally { lock.releaseLock(); }
+function snapshot_(props) {
+  const info = snapshotInfo_(props);
+  if (!info) throw new Error('SYNC_REQUIRED');
+  const cache = CacheService.getScriptCache();
+  const key = 'timetable:' + info.tab;
+  const hit = cache.get(key);
+  const packed = hit || SpreadsheetApp.openById(props.getProperty('SNAPSHOT_BOOK')).getSheetByName(info.tab)
+    .getDataRange().getDisplayValues().map(row => row[0].slice(2)).join('');
+  if (!hit && packed.length < 95000) cache.put(key, packed, 600);
+  return JSON.parse(Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(packed), 'application/gzip')).getDataAsString());
 }
 
-function norm_(value) {
-  return String(value || '').normalize('NFKC').toLowerCase().replace(/[\s_.()\-]/g, '');
+const HEADERS = {
+  name: ['성명','이름','학생명','학생이름','학생성명','한글이름','한글성명','name','studentname','koreanname','학생'],
+  grade: ['학년','grade'], group: ['반','학급','class','section','homeroom'],
+  number: ['번호','출석번호','number','studentnumber','no'],
+  date: ['날짜','일자','일시','출결일','출결일자','방문일','방문일자','방문일시','기록일자','타임스탬프','date','timestamp','visitdate','attendancedate'],
+  status: ['출결','출결상태','상태','출결구분','출결유형','종류','구분','status','attendance','type'],
+  period: ['교시','해당교시','결과교시','period'],
+  time: ['시간','시각','출결시간','time']
+};
+
+function columns_(headers, overrides) {
+  const normalized = headers.map(header => norm_(header).replace(/[_.()-]/g, ''));
+  const roles = Object.fromEntries(Object.entries(HEADERS).map(([key, list]) =>
+    [key, normalized.findIndex(value => list.includes(value))]));
+  if (overrides) for (const part of overrides.split(',')) {
+    const [key, letters] = part.split('=').map(value => value.trim());
+    roles[key.toLowerCase()] = [...letters].reduce((sum, letter) => sum * 26 + letter.charCodeAt(0) - 64, 0) - 1;
+  }
+  return roles;
 }
 
-function hasField_(row, field) {
-  return row.some(value => FIELDS[field].some(alias => norm_(alias) === norm_(value)));
+function todayRecords_(key, source, date) {
+  const { headers, rows } = table_(source, key);
+  const c = columns_(headers, source.columns);
+  const grid = key === 'attendance' && source.mode === 'grid';
+  const statuses = grid ? headers.flatMap((header, index) => dayKey_(header) === date ? [index] : []) : [c.status];
+  const exists = index => Number.isInteger(index) && index >= 0 && index < headers.length;
+  if (!exists(c.name) || (!grid && (!exists(c.date) || (key === 'attendance' && !exists(c.status))))) {
+    throw new Error(key.toUpperCase() + '_LAYOUT_UNKNOWN');
+  }
+  if (grid && !statuses.length) throw new Error('ATTENDANCE_DATE_NOT_FOUND');
+  return rows.flatMap(row => {
+    const name = norm_(row[c.name]);
+    if (!name || (!grid && dayKey_(row[c.date]) !== date)) return [];
+    const info = { name, grade: grade_(row[c.grade]), group: group_(row[c.group]), number: number_(row[c.number]) };
+    if (key === 'clinic') return [info];
+    return statuses.flatMap(column => {
+      const state = attendanceStatus_(row[column]);
+      return state ? [{ ...info, state, period: period_(row[c.period]) || period_(row[column]?.match(/([1-7])\s*교시/)?.[1]),
+        time: clean_(row[c.time]).match(/(?:^|\s)([012]?\d:[0-5]\d)(?::[0-5]\d)?(?:$|\s)/)?.[1] || '' }] : [];
+    });
+  });
 }
 
-function day_() {
-  return Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
+function attendanceStatus_(value) {
+  const text = norm_(value);
+  if (!text || /^(출석|정상|present|[.✓✔-])$/.test(text)) return '';
+  if (/조퇴|earlydeparture/.test(text)) return 'early';
+  if (/지각|late|tardy/.test(text)) return 'late';
+  if (/결과|missedclass|periodabsence/.test(text)) return 'missed';
+  if (/결석|absent|absence/.test(text)) return 'absent';
+  return 'other';
 }
 
-function dateKey_(value) {
-  if (value instanceof Date) return Utilities.formatDate(value, TZ, 'yyyy-MM-dd');
-  const match = /^(\d{4})\s*[-./년]\s*(\d{1,2})\s*[-./월]\s*(\d{1,2})(?!\d)/.exec(String(value).trim());
-  return match ? [match[1], match[2].padStart(2, '0'), match[3].padStart(2, '0')].join('-') : '';
+function live_(student, students, settings, force) {
+  const now = new Date();
+  const date = Utilities.formatDate(now, ZONE, 'yyyy-MM-dd');
+  const cache = CacheService.getScriptCache();
+  const matches = (item, record) => item.names.some(name => norm_(name) === record.name) &&
+    (!record.grade || record.grade === item.grade) && (!record.group || record.group === item.group) &&
+    (!record.number || record.number === item.number);
+  const lookup = key => {
+    try {
+      const source = settings.sources[key];
+      const cacheKey = 'attendance:' + date + ':' + digest_(JSON.stringify(source));
+      const value = key === 'attendance' && !force ? cache.get(cacheKey) : null;
+      const batch = value ? JSON.parse(value) : { at: now.toISOString(), records: todayRecords_(key, source, date) };
+      if (key === 'attendance' && !value) {
+        const payload = JSON.stringify(batch);
+        if (Utilities.newBlob(payload).getBytes().length < 95000) cache.put(cacheKey, payload, CACHE_SECONDS);
+      }
+      const candidates = batch.records.filter(record => matches(student, record));
+      const eligible = candidates.filter(record => students.filter(item => matches(item, record)).length === 1);
+      return { at: batch.at, ambiguous: eligible.length !== candidates.length,
+        ...(key === 'attendance' ? { events: eligible.map(({ state, period, time }) => ({ state, period, time })) }
+          : { visited: eligible.length > 0 }) };
+    } catch (error) {
+      const reason = /^[A-Z][A-Z0-9_]{1,70}$/.test(error.message) ? error.message : 'SOURCE_READ_FAILED';
+      return { error: reason };
+    }
+  };
+  return { date, attendance: lookup('attendance'), clinic: lookup('clinic') };
 }

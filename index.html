@@ -3,31 +3,66 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="strict-origin">
   <title>HIS Finder</title>
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
 </head>
 <body>
-  <main class="gate">
-    <section class="gate-card">
-      <div class="brand-mark">HIS</div>
-      <h1 id="title">학생 빠른 찾기</h1>
-      <p id="status" class="muted" role="status">학교 계정으로 웹 앱을 열어 주세요.</p>
-      <p><a id="launch" class="button primary" href="https://script.google.com/a/macros/his.sc.kr/s/AKfycbzzs2qvIUDZnr2gIxVwELEDkHRdLPbjWhj-rmNYE4gr6wgwCW4eGNe9DM89qC2PCJVHYQ/exec">학생 검색 열기</a></p>
-      <button id="language" class="button primary" type="button">English</button>
+  <header class="bar">
+    <a class="brand" href="./">HIS <span>Finder</span></a>
+    <nav aria-label="HIS Finder">
+      <button id="settings-button" type="button" hidden data-text="settings"></button>
+      <button id="language" type="button" lang="en">English</button>
+      <button id="logout" type="button" hidden data-text="logout"></button>
+    </nav>
+  </header>
+  <main>
+    <section id="signin-panel" class="panel signin">
+      <h1 data-text="title"></h1>
+      <p data-text="intro"></p>
+      <button id="signin" type="button" class="primary" disabled data-text="signin"></button>
     </section>
+    <p id="notice" class="notice" role="status" hidden></p>
+    <section id="finder" hidden>
+      <div class="panel search-panel">
+        <h1 data-text="title"></h1>
+        <form id="search-form" class="search">
+          <label class="visually-hidden" for="query" data-text="studentName"></label>
+          <input id="query" required minlength="2" maxlength="80" autocomplete="off" data-placeholder="studentName">
+          <button class="primary" data-text="search"></button>
+        </form>
+        <ul id="results" class="results"></ul>
+      </div>
+      <section id="student" class="panel student" hidden aria-labelledby="student-heading">
+        <div class="student-header">
+          <div><h2 id="student-heading"></h2><p id="term"></p></div>
+          <button type="button" id="refresh" data-text="refresh"></button>
+        </div>
+        <div id="live" class="live" aria-live="polite"></div>
+        <div class="grid-wrap"><table id="timetable"></table></div>
+      </section>
+    </section>
+    <dialog id="settings">
+      <form id="settings-form" class="settings-form">
+        <div class="student-header">
+          <h2 data-text="settings"></h2>
+          <button id="close-settings" type="button" data-text="close"></button>
+        </div>
+        <p id="settings-notice" class="notice" role="status" hidden></p>
+        <label><span data-text="term"></span><input id="settings-term" placeholder="2026-2" pattern="20[0-9]{2}-[12]"></label>
+        <div id="sources"></div>
+        <button id="inspect" type="button" data-text="inspect"></button>
+        <div id="inspection"></div>
+        <h3 data-text="bell"></h3>
+        <label><span data-text="shortDates"></span><input id="overrides" placeholder="2026-11-26, 2026-11-27"></label>
+        <div id="profiles" class="profiles"></div>
+        <div class="settings-actions">
+          <button class="primary" data-text="save"></button>
+          <button id="sync" type="button" data-text="sync"></button>
+        </div>
+      </form>
+    </dialog>
   </main>
-  <script>
-    const launch = document.getElementById('launch');
-    let english = false;
-    function render() {
-      document.documentElement.lang = english ? 'en' : 'ko';
-      document.getElementById('title').textContent = english ? 'Find a student' : '학생 빠른 찾기';
-      document.getElementById('status').textContent = english ? 'Open the web app with your school account.' : '학교 계정으로 웹 앱을 열어 주세요.';
-      launch.textContent = english ? 'Open HIS Finder' : '학생 검색 열기';
-      document.getElementById('language').textContent = english ? '한국어' : 'English';
-    }
-    document.getElementById('language').addEventListener('click', () => { english = !english; render(); });
-    render();
-  </script>
 </body>
 </html>
