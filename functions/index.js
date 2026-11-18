@@ -115,7 +115,7 @@ async function readSheet(url) {
   });
 }
 
-function normalizeHeader(value) { return String(value || "").toLowerCase().replace(/[\s_\-()����.]/g, ""); }
+function normalizeHeader(value) { return String(value || "").toLowerCase().replace(/[\s_\-()（）.]/g, ""); }
 function pick(fields, aliases) {
   const entries = Object.entries(fields);
   const normalizedAliases = aliases.map(normalizeHeader);
@@ -123,11 +123,11 @@ function pick(fields, aliases) {
   return found ? found[1] : "";
 }
 function normalizeRow(fields, rowNumber) {
-  const id = pick(fields, ["�л�id", "�л�id��ȣ", "�й�", "studentid", "student id", "sid"]);
-  const name = pick(fields, ["�л���", "�̸�", "����", "name", "studentname", "student name"]);
-  const grade = pick(fields, ["�г�", "grade", "yearlevel"]);
-  const classroom = pick(fields, ["��", "�б�", "class", "homeroom"]);
-  const number = pick(fields, ["��ȣ", "�⼮��ȣ", "�л���ȣ", "number", "studentnumber", "rollno"]);
+  const id = pick(fields, ["학생id", "학생id번호", "학번", "studentid", "student id", "sid"]);
+  const name = pick(fields, ["학생명", "이름", "성명", "name", "studentname", "student name"]);
+  const grade = pick(fields, ["학년", "grade", "yearlevel"]);
+  const classroom = pick(fields, ["반", "학급", "class", "homeroom"]);
+  const number = pick(fields, ["번호", "출석번호", "학생번호", "number", "studentnumber", "rollno"]);
   const identity = id || [grade, classroom, number].filter(Boolean).join("-") || name;
   return { rowNumber, identity: normalizeHeader(identity), id, name, grade, classroom, number, fields };
 }
@@ -135,14 +135,15 @@ function normalizeRow(fields, rowNumber) {
 async function syncSource(source) {
   const sources = await getSources();
   const rows = await readSheet(sources[source]);
+  await recordSync(source, sources[source]);
   if (source === "health") {
     // Health data is fetched directly on each student search so the app never serves a stale snapshot.
-    return { rowCount: rows.length, message: `���ǽ� ��Ʈ�� ���� Ȯ���߽��ϴ�. (${rows.length}��)` };
+    return { rowCount: rows.length, message: `보건실 시트를 새로 확인했습니다. (${rows.length}행)` };
   }
   if (source === "timetable") {
     const current = await DATA_ROOT.doc(source).get();
     const term = getKoreanSemester(new Date());
-    if (current.exists && current.data().semester === term) throw httpError(409, `${term} �ð�ǥ�� �̹� �����Ǿ����ϴ�.`);
+    if (current.exists && current.data().semester === term) throw httpError(409, `${term} 시간표는 이미 연동되었습니다.`);
   }
   const rowCount = await replaceGeneration(source, rows);
   const metadata = {
@@ -155,7 +156,7 @@ async function syncSource(source) {
   metadata.activeGeneration = rowCount.generation;
   metadata.rowCount = rowCount.count;
   await DATA_ROOT.doc(source).set(metadata, { merge: true });
-  return { rowCount: rowCount.count, message: `${rowCount.count}���� �����߽��ϴ�.` };
+  return { rowCount: rowCount.count, message: `${rowCount.count}행을 연동했습니다.` };
 }
 
 async function replaceGeneration(source, rows) {
@@ -167,6 +168,13 @@ async function replaceGeneration(source, rows) {
   });
   await writer.close();
   return { generation, count: rows.length };
+}
+
+async function recordSync(source, url) {
+  const snapshot = await CONFIG_REF.get();
+  const sources = snapshot.exists ? snapshot.data().sources || {} : {};
+  sources[source] = { ...(sources[source] || {}), url, lastSyncedAt: Timestamp.now() };
+  await CONFIG_REF.set({ sources, updatedAt: Timestamp.now() }, { merge: true });
 }
 
 async function activeRows(source) {
@@ -201,7 +209,7 @@ async function searchStudents(query) {
 }
 
 function formatFields(fields) {
-  return Object.entries(fields).filter(([, value]) => value !== "").map(([key, value]) => `${key}: ${value}`).join(" �� ");
+  return Object.entries(fields).filter(([, value]) => value !== "").map(([key, value]) => `${key}: ${value}`).join(" · ");
 }
 function getKoreanSemester(date) {
   const month = Number(new Intl.DateTimeFormat("en", { timeZone: "Asia/Seoul", month: "numeric" }).format(date));
@@ -209,4 +217,3 @@ function getKoreanSemester(date) {
   return `${year}-${month < 8 ? "1" : "2"}`;
 }
 function httpError(status, message) { const error = new Error(message); error.status = status; return error; }
-
