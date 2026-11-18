@@ -3,57 +3,37 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#10253f">
-  <title>학생 빠른 찾기 | HIS</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <title>HIS Finder</title>
   <link rel="stylesheet" href="./styles.css">
-  <style>.language-toggle{position:fixed;z-index:1100;right:20px;top:18px;background:#fff;color:#10253f;border:1px solid #d7dfe8}.account{padding-right:78px}@media(max-width:680px){.language-toggle{right:10px;top:10px;padding:7px 10px}.account{padding-right:72px}}</style>
 </head>
 <body>
-  <button id="language-toggle" class="button ghost language-toggle" type="button" aria-label="Change language">English</button>
-  <div id="gate" class="gate">
-    <div class="gate-card">
+  <main class="gate">
+    <section class="gate-card">
       <div class="brand-mark">HIS</div>
-      <p class="eyebrow">HANDONG INTERNATIONAL SCHOOL</p>
-      <h1 data-i18n="appName">학생 빠른 찾기</h1>
-      <p class="muted" data-i18n="gateInfo">학교 계정으로 로그인해 주세요. @his.sc.kr 계정만 사용할 수 있습니다.</p>
-      <button id="login-button" class="button primary" data-i18n="login">Google 계정으로 로그인</button>
-      <p id="gate-message" class="message" aria-live="polite"></p>
-    </div>
-  </div>
-
-  <div id="app" class="app-shell" hidden>
-    <header class="topbar">
-      <a class="brand" href="./" aria-label="HIS Student Finder"><span class="brand-mark small">HIS</span><span data-i18n="appName">학생 빠른 찾기</span></a>
-      <div class="account"><a id="admin-link" class="button ghost" href="./admin.html" data-i18n="admin" hidden>관리자</a><span id="account-email"></span><button id="logout-button" class="button ghost" data-i18n="logout">로그아웃</button></div>
-    </header>
-
-    <main>
-      <section class="intro">
-        <p class="eyebrow">STUDENT QUICK LOOKUP</p>
-        <h1 data-i18n="headline">학생 정보를 한 번에 찾으세요</h1>
-        <p class="muted" data-i18n="intro">이름, 학년, 반 또는 번호로 검색합니다. @his.sc.kr 계정으로 로그인한 교직원이 사용할 수 있습니다.</p>
-      </section>
-
-      <section class="search-card" aria-label="학생 검색">
-        <form id="search-form">
-          <label for="search-input" data-i18n="searchLabel">학생 검색</label>
-          <div class="search-row">
-            <input id="search-input" name="q" type="search" data-i18n-placeholder="searchPlaceholder" placeholder="예: 홍길동, 8학년, 8-2, 104" autocomplete="off" minlength="1" required>
-            <button class="button primary" type="submit" data-i18n="searchButton">검색</button>
-          </div>
-          <p class="hint" data-i18n="searchHint">검색어를 입력하면 학생 목록과 관련 정보를 확인할 수 있습니다.</p>
-        </form>
-      </section>
-
-      <div id="notice" class="notice" role="status" aria-live="polite" data-i18n="checkingLogin">로그인 상태를 확인하고 있습니다.</div>
-      <section id="results" class="results" aria-live="polite"></section>
-    </main>
-
-    <footer><span data-i18n="schoolName">Handong International School</span><span data-i18n="privacyNote">학생 정보는 학교 업무 목적으로만 사용해 주세요.</span></footer>
-  </div>
-  <script type="module" src="./app.js"></script>
+      <h1 id="title">학생 빠른 찾기</h1>
+      <p id="status" class="muted" role="status">학교용 웹 앱 주소를 연결하는 중입니다.</p>
+      <p><a id="launch" class="button primary" hidden>학생 검색 열기</a></p>
+      <button id="language" class="button primary" type="button">English</button>
+    </section>
+  </main>
+  <script src="./web-app-url.js"></script>
+  <script>
+    const launch = document.getElementById('launch');
+    const url = window.HIS_FINDER_WEB_APP_URL || '';
+    const ready = /^https:\/\/script\.google\.com\/(?:a\/[^/]+\/)?macros\/s\/[\w-]+\/exec$/.test(url);
+    let english = false;
+    if (ready) { launch.href = url; launch.hidden = false; }
+    function render() {
+      document.documentElement.lang = english ? 'en' : 'ko';
+      document.getElementById('title').textContent = english ? 'Find a student' : '학생 빠른 찾기';
+      document.getElementById('status').textContent = ready
+        ? (english ? 'Open the web app with your school account.' : '학교 계정으로 웹 앱을 열어 주세요.')
+        : (english ? 'The school web app link has not been set yet.' : '학교용 웹 앱 주소 설정이 아직 완료되지 않았습니다.');
+      launch.textContent = english ? 'Open HIS Finder' : '학생 검색 열기';
+      document.getElementById('language').textContent = english ? '한국어' : 'English';
+    }
+    document.getElementById('language').addEventListener('click', () => { english = !english; render(); });
+    render();
+  </script>
 </body>
 </html>
