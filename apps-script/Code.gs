@@ -55,7 +55,7 @@ function authenticate_(token, apiKey, props) {
       clean_(claims.email).toLowerCase() !== email || !/^[^@\s]+@his\.sc\.kr$/.test(email)) {
     throw new Error('AUTH_REQUIRED');
   }
-  return { admin: email === clean_(props.getProperty('ADMIN_EMAIL')).toLowerCase() };
+  return { email, admin: email === clean_(props.getProperty('ADMIN_EMAIL')).toLowerCase() };
 }
 
 function dispatch_(request, account, props) {
@@ -63,6 +63,15 @@ function dispatch_(request, account, props) {
   switch (request.action) {
     case 'session':
       return { admin: account.admin, profiles: settings.profiles, overrides: settings.overrides };
+    case 'overview':
+      if (!account.admin) {
+        const staff = firestoreFetch_('/staff/' + encodeURIComponent(account.email), request.token, null, true);
+        if (!['admin', 'teacher', 'staff'].includes(staff?.fields?.role?.stringValue)) throw new Error('STAFF_REQUIRED');
+      }
+      return sourceSummary_(settings, request.force === true, batch => ({ rows: batch.records.map(record => ({
+        name: record.displayName, grade: record.grade, group: record.group,
+        state: record.state || '', period: record.period || '', time: record.time || ''
+      })), current: batch.current, at: batch.at }));
     case 'search': {
       const query = clean_(request.query).toLowerCase().replace(/\s/g, '');
       if (query.length < 2 || query.length > 80) throw new Error('BAD_QUERY');
@@ -339,10 +348,51 @@ function snapshotInfo_(props) {
   return JSON.parse(props.getProperty('SNAPSHOT') || 'null');
 }
 
+function clubTimetables_(students, props, term) {
+  const url = props.getProperty('CLUB_SOURCE_URL');
+  if (!url) return;
+  const memberSheet = sheet_({ url, tab: '통합_Info' }, 'club');
+  const catalog = table_({ url, tab: 'Club List', header: 2 }, 'club');
+  const schoolYear = term.slice(0, 4);
+  const width = memberSheet.getLastColumn();
+  if (width < 7 || memberSheet.getLastRow() < 2) throw new Error('CLUB_LAYOUT_UNKNOWN');
+  const headers = memberSheet.getRange(1, 1, 1, width).getDisplayValues()[0];
+  const clubColumn = headers.findIndex(header => norm_(header) === '동아리') + 1;
+  if (!clubColumn) throw new Error('CLUB_LAYOUT_UNKNOWN');
+  const count = memberSheet.getLastRow() - 1;
+  const identity = memberSheet.getRange(2, 1, count, 2).getDisplayValues();
+  const classes = memberSheet.getRange(2, 5, count, 3).getDisplayValues();
+  const values = memberSheet.getRange(2, clubColumn, count, 1).getDisplayValues();
+  const catalogByName = new Map(catalog.rows.filter(row => clean_(row[2])).map(row =>
+    [norm_(row[2]), { name: clean_(row[2]), teacher: clean_(row[3]), room: clean_(row[4]) }]));
+  const membership = new Map();
+  const key = (name, grade, group, number) => JSON.stringify([norm_(name), grade, group, number]);
+  for (let i = 0; i < count; i++) {
+    const [year, name] = identity[i];
+    const [grade, group, number] = classes[i];
+    const club = clean_(values[i][0]);
+    if (clean_(year) === schoolYear && name && club) {
+      const id = key(name, grade_(grade), group_(group), number_(number));
+      const entries = membership.get(id) || new Set();
+      for (const entry of club.split(/[\n,、·;\/]+/).map(clean_).filter(Boolean)) entries.add(entry);
+      membership.set(id, entries);
+    }
+  }
+  for (const student of students) {
+    const assigned = membership.get(key(student.name, student.grade, student.group, student.number));
+    if (!assigned?.size) continue;
+    const clubs = [...assigned].map(name => catalogByName.get(norm_(name)) || { name });
+    const name = clubs.map(club => club.name).join(' / ');
+    const combine = field => [...new Set(clubs.map(club => club[field]).filter(Boolean))].join(' / ');
+    student.lessons['수:6'] = { ko: name, en: name, room: combine('room'), teacher: combine('teacher') };
+  }
+}
+
 function sync_(props, settings, token) {
   if (!settings.term) throw new Error('TERM_REQUIRED');
   const students = buildStudents_(table_(settings.sources.courses, 'courses').rows,
     table_(settings.sources.schedule, 'schedule').rows);
+  clubTimetables_(students, props, settings.term);
   const previous = snapshotInfo_(props);
   const oldStudents = previous ? snapshot_(props).students : [];
   let bookId = props.getProperty('SNAPSHOT_BOOK');
@@ -418,10 +468,11 @@ function firestoreValue_(value) {
 
 const FINDER_DOCUMENTS = 'projects/' + PROJECT + '/databases/(default)/documents';
 
-function firestoreFetch_(path, token, writes) {
+function firestoreFetch_(path, token, writes, allowMissing = false) {
   const options = { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true };
   if (writes) Object.assign(options, { method: 'post', contentType: 'application/json', payload: JSON.stringify({ writes }) });
   const response = UrlFetchApp.fetch('https://firestore.googleapis.com/v1/' + FINDER_DOCUMENTS + path, options);
+  if (allowMissing && [403, 404].includes(response.getResponseCode())) return null;
   if (response.getResponseCode() === 403) throw new Error('FIRESTORE_RULES_REQUIRED');
   if (response.getResponseCode() !== 200) throw new Error('FIRESTORE_SYNC_FAILED');
   return JSON.parse(response.getContentText());
@@ -537,7 +588,7 @@ function todayRecords_(key, source, date) {
     if (!name || (!grid && !current && dayKey_(row[c.date]) !== date)) return [];
     const number = number_(row[c.number]);
     const classCode = number.match(/^(7|8|9|10|11|12)\s*[- ]?\s*([A-Z]{1,3})$/i);
-    const info = { name, grade: grade_(row[c.grade]) || classCode?.[1] || '',
+    const info = { name, displayName: clean_(row[c.name]), grade: grade_(row[c.grade]) || classCode?.[1] || '',
       group: group_(row[c.group]) || classCode?.[2].toUpperCase() || '', number: classCode ? '' : number };
     if (key === 'clinic') return [info];
     return statuses.flatMap(column => {
@@ -560,27 +611,33 @@ function attendanceStatus_(value) {
 }
 
 function live_(student, students, settings, force) {
-  const now = new Date();
-  const date = Utilities.formatDate(now, ZONE, 'yyyy-MM-dd');
-  const cache = CacheService.getScriptCache();
   const matches = (item, record) => item.names.some(name => norm_(name) === record.name) &&
     (!record.grade || record.grade === item.grade) && (!record.group || record.group === item.group) &&
     (!record.number || record.number === item.number);
+  return sourceSummary_(settings, force, (batch, key) => {
+    const candidates = batch.records.filter(record => matches(student, record));
+    const eligible = candidates.filter(record => students.filter(item => matches(item, record)).length === 1);
+    return { at: batch.at, ambiguous: eligible.length !== candidates.length,
+      ...(key === 'attendance' ? { events: eligible.map(({ state, period, time }) => ({ state, period, time })) }
+        : { visited: eligible.length > 0, current: batch.current }) };
+  });
+}
+
+function sourceSummary_(settings, force, summarize) {
+  const now = new Date();
+  const date = Utilities.formatDate(now, ZONE, 'yyyy-MM-dd');
+  const cache = CacheService.getScriptCache();
   const lookup = key => {
     try {
       const source = settings.sources[key];
-      const cacheKey = 'attendance:v2:' + date + ':' + digest_(JSON.stringify(source));
+      const cacheKey = 'attendance:v3:' + date + ':' + digest_(JSON.stringify(source));
       const value = key === 'attendance' && !force ? cache.get(cacheKey) : null;
       const batch = value ? JSON.parse(value) : { at: now.toISOString(), ...todayRecords_(key, source, date) };
       if (key === 'attendance' && !value) {
         const payload = JSON.stringify(batch);
         if (Utilities.newBlob(payload).getBytes().length < 95000) cache.put(cacheKey, payload, CACHE_SECONDS);
       }
-      const candidates = batch.records.filter(record => matches(student, record));
-      const eligible = candidates.filter(record => students.filter(item => matches(item, record)).length === 1);
-      return { at: batch.at, ambiguous: eligible.length !== candidates.length,
-        ...(key === 'attendance' ? { events: eligible.map(({ state, period, time }) => ({ state, period, time })) }
-          : { visited: eligible.length > 0, current: batch.current }) };
+      return summarize(batch, key);
     } catch (error) {
       const reason = /^[A-Z][A-Z0-9_]{1,70}$/.test(error.message) ? error.message : 'SOURCE_READ_FAILED';
       return { error: reason };

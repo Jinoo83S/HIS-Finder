@@ -41,6 +41,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .live-card { border-radius: .45rem; background: #edf6f1; border: 1px solid #e0ede6; padding: .4rem .6rem; font-size: .86rem; line-height: 1.42; overflow-wrap: anywhere; }
 .live-error { background: #fff7eb; border-color: #f2dec2; }
 .live strong, .live small { display: block; }
+.overview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; }
+.overview-card h2 { font-size: 1rem; }
+.overview-list { list-style: none; padding: 0; margin: 0; }
+.overview-list li { display: flex; align-items: baseline; justify-content: space-between; gap: .35rem; padding: .23rem 0; border-bottom: 1px solid var(--border); font-size: .85rem; overflow-wrap: anywhere; }
+.overview-list li:last-child { border-bottom: 0; }
+.overview-list small { flex: 0 1 auto; text-align: right; color: var(--muted); }
 .warn { color: #854807; overflow-wrap: anywhere; }
 .schedule-view { min-width: 0; }
 .day-controls, .day-schedule { display: none; }
@@ -81,6 +87,8 @@ fieldset { margin: .6rem 0; min-width: 0; border: 1px solid var(--border); borde
   #refresh { flex: 0 0 auto; padding: .25rem .34rem; font-size: .72rem; }
   .live { gap: .3rem; margin: .28rem 0 .52rem; }
   .live-card { padding: .29rem .38rem; font-size: .76rem; }
+  .overview { gap: .3rem; }
+  .overview-list li { flex-wrap: wrap; gap: .1rem .3rem; font-size: .77rem; }
   #timetable { display: none; }
   .day-controls { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .24rem; margin-bottom: .28rem; }
   .day-controls button { display: flex; justify-content: center; align-items: baseline; gap: .2rem; padding: .31rem .12rem; font-size: .8rem; min-height: 37px; }

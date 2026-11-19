@@ -2,6 +2,7 @@ import { apiUrl } from './config.js';
 
 const copy = {
   ko: {
+    club: '동아리', chapel: '채플', clinicCurrent: '현재 보건실 입실', clinicToday: '오늘 보건실 방문',
     weeklyTimetable: '시간표', shortDays: ['월', '화', '수', '목', '금'],
     inClinic: '현재 입실 중', notInClinic: '현재 입실 기록 없음', noLessons: '표시할 교시가 없습니다.',
     previewPublic: '공개 시간표 미리보기', publishPublic: 'GitHub에 공개', published: '공개 시간표를 GitHub에 올렸습니다.',
@@ -31,6 +32,7 @@ const copy = {
     days: ['월요일','화요일','수요일','목요일','금요일']
   },
   en: {
+    club: 'Club', chapel: 'Chapel', clinicCurrent: 'Currently in the health office', clinicToday: 'Health office visits today',
     weeklyTimetable: 'Timetable', shortDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
     inClinic: 'Currently in the health office', notInClinic: 'No current entry', noLessons: 'No periods to display.',
     previewPublic: 'Preview public timetable', publishPublic: 'Publish to GitHub', published: 'Public timetable published to GitHub.',
@@ -69,6 +71,7 @@ let language = localStorage.getItem('his-finder-language') === 'en' ? 'en' : 'ko
 let firebaseAuth, authSdk, session, selected, details, latestSettings;
 let db, firestore, publicPreview;
 let displayedDay;
+let overviewData, overviewPending = false, searchStarted = false;
 let publicSlots = new Map();
 let matches = [];
 let generation = 0;
@@ -171,6 +174,14 @@ function profileFor(date, friday) {
   return session.profiles[section + (short ? 'Short' : friday ? 'Friday' : 'Regular')];
 }
 
+function lessonAt(day, slot) {
+  if (day === '수' && slot === '7') return { ko: 'SA', en: 'SA', room: t('chapel') };
+  const lesson = details.lessons[day + ':' + slot];
+  if (day === '수' && slot === '6' && (!lesson || lesson.unresolved ||
+    /^(club|동아리)$/i.test(lesson.ko || ''))) return { ko: '동아리', en: 'Club' };
+  return lesson;
+}
+
 function renderTimetable() {
   if (!details || !selected) return;
   const now = schoolTime();
@@ -206,7 +217,7 @@ function renderTimetable() {
         const slotLabel = /^\d$/.test(slot)
           ? (language === 'ko' ? slot + t('period') : t('period') + ' ' + slot) : label(slot);
         cell.append(node('div', slotLabel + ' · ' + time.replace('-', '–'), 'secondary slot-label'));
-        const item = details.lessons[day.key + ':' + slot];
+        const item = lessonAt(day.key, slot);
         if (item?.unresolved) cell.append(node('span', t('unresolved'), 'warn'));
         else if (item) {
           const schedule = publicSlots.get(item.publicKey) || item;
@@ -251,7 +262,7 @@ function drawDaySchedule(days, dayIndex, nowTime) {
     const when = node('div', null, 'day-when');
     const slotLabel = /^\d$/.test(slot) && language === 'ko' ? slot + t('period') : label(slot);
     when.append(node('strong', slotLabel), node('small', time.replace('-', '–')));
-    const item = details.lessons[day.key + ':' + slot];
+    const item = lessonAt(day.key, slot);
     const subject = node('div', null, 'day-subject');
     if (item?.unresolved) subject.append(node('span', t('unresolved'), 'warn'));
     else if (item) {
@@ -273,6 +284,49 @@ function displayTime(iso) {
   return new Intl.DateTimeFormat(language === 'ko' ? 'ko-KR' : 'en-GB', {
     dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Seoul'
   }).format(new Date(iso));
+}
+
+function renderOverview() {
+  const target = byId('overview');
+  target.hidden = searchStarted || !session || !overviewData;
+  if (target.hidden) return;
+  target.replaceChildren(...['attendance', 'clinic'].map(type => {
+    const status = overviewData[type];
+    const section = node('section', null, 'panel overview-card');
+    const heading = type === 'attendance' ? t('attendance') : t(status.current === false ? 'clinicToday' : 'clinicCurrent');
+    section.append(node('h2', heading));
+    if (status.error) section.append(node('p', errorText(new Error(status.error)), 'warn'));
+    else if (!status.rows.length) section.append(node('p', t(type === 'attendance' ? 'noEvents' :
+      status.current ? 'notInClinic' : 'noVisit'), 'secondary'));
+    else {
+      const list = node('ul', null, 'overview-list');
+      for (const row of status.rows) {
+        const item = node('li');
+        item.append(node('span', [row.name, row.grade + row.group].filter(Boolean).join(' · ')));
+        if (row.state) item.append(node('small', [t(row.state), row.period && label(row.period), row.time].filter(Boolean).join(' · ')));
+        list.append(item);
+      }
+      section.append(list);
+    }
+    return section;
+  }));
+}
+
+async function refreshOverview() {
+  if (!session || searchStarted || document.hidden || overviewPending) return;
+  const request = authGeneration;
+  overviewPending = true;
+  try {
+    const result = await call('overview');
+    if (authGeneration !== request) return;
+    overviewData = result;
+    renderOverview();
+  } catch (error) {
+    if (authGeneration !== request) return;
+    overviewData = error.message === 'STAFF_REQUIRED' ? undefined :
+      { attendance: { error: error.message }, clinic: { error: error.message } };
+    renderOverview();
+  } finally { overviewPending = false; }
 }
 
 function renderStudent() {
@@ -501,10 +555,23 @@ byId('language').addEventListener('click', () => {
   translate();
   if (!apiUrl) notice('notice', t('setup'));
   renderStudent();
+  renderOverview();
   if (publicPreview) showPublicPreview(publicPreview);
+});
+byId('query').addEventListener('input', event => {
+  if (event.target.value.trim()) return;
+  searchStarted = false;
+  matches = [];
+  drawMatches();
+  resetStudent();
+  notice('notice');
+  renderOverview();
+  void refreshOverview();
 });
 byId('search-form').addEventListener('submit', async event => {
   event.preventDefault();
+  searchStarted = true;
+  renderOverview();
   resetStudent();
   const request = generation;
   matches = [];
@@ -588,6 +655,10 @@ async function start() {
     auth.onAuthStateChanged(firebaseAuth, async user => {
       const request = ++authGeneration;
       session = undefined;
+      overviewData = undefined;
+      searchStarted = false;
+      byId('overview').replaceChildren();
+      renderOverview();
       matches = [];
       drawMatches();
       resetStudent();
@@ -612,6 +683,7 @@ async function start() {
         byId('finder').hidden = false;
         byId('settings-button').hidden = !session.admin;
         notice('notice');
+        void refreshOverview();
       } catch (error) {
         if (request !== authGeneration) return;
         if (error.message === 'AUTH_REQUIRED') await auth.signOut(firebaseAuth);
@@ -629,6 +701,6 @@ byId('signin').addEventListener('click', async () => {
   catch (error) { notice('notice', t('loginError') + ' (' + (error.code || 'AUTH') + ')'); }
 });
 byId('logout').addEventListener('click', () => authSdk.signOut(firebaseAuth));
-setInterval(() => { refresh(); }, 30000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+setInterval(() => { refresh(); refreshOverview(); }, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); refreshOverview(); } });
 start();
