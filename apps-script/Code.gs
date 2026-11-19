@@ -510,19 +510,35 @@ function columns_(headers, overrides) {
 }
 
 function todayRecords_(key, source, date) {
-  const { headers, rows } = table_(source, key);
-  const c = columns_(headers, source.columns);
+  let { headers, rows } = table_(source, key);
   const grid = key === 'attendance' && source.mode === 'grid';
+  let c = columns_(headers, source.columns);
+  if (key === 'attendance' && !grid && !source.columns && [c.name, c.date, c.status].includes(-1)) {
+    const headerIndex = rows.slice(0, 10).findIndex(row => {
+      const roles = columns_(row, '');
+      return [roles.name, roles.date, roles.status].every(index => index >= 0);
+    });
+    if (headerIndex >= 0) {
+      headers = rows[headerIndex];
+      rows = rows.slice(headerIndex + 1);
+      c = columns_(headers, '');
+    }
+  }
+  const current = key === 'clinic' && c.date < 0 && c.grade >= 0 && c.group >= 0 &&
+    headers.some(header => norm_(header) === 'entry') && headers.some(header => norm_(header) === 'e-name');
   const statuses = grid ? headers.flatMap((header, index) => dayKey_(header) === date ? [index] : []) : [c.status];
   const exists = index => Number.isInteger(index) && index >= 0 && index < headers.length;
-  if (!exists(c.name) || (!grid && (!exists(c.date) || (key === 'attendance' && !exists(c.status))))) {
+  if (!exists(c.name) || (!grid && !current && (!exists(c.date) || (key === 'attendance' && !exists(c.status))))) {
     throw new Error(key.toUpperCase() + '_LAYOUT_UNKNOWN');
   }
   if (grid && !statuses.length) throw new Error('ATTENDANCE_DATE_NOT_FOUND');
-  return rows.flatMap(row => {
+  const records = rows.flatMap(row => {
     const name = norm_(row[c.name]);
-    if (!name || (!grid && dayKey_(row[c.date]) !== date)) return [];
-    const info = { name, grade: grade_(row[c.grade]), group: group_(row[c.group]), number: number_(row[c.number]) };
+    if (!name || (!grid && !current && dayKey_(row[c.date]) !== date)) return [];
+    const number = number_(row[c.number]);
+    const classCode = number.match(/^(7|8|9|10|11|12)\s*[- ]?\s*([A-Z]{1,3})$/i);
+    const info = { name, grade: grade_(row[c.grade]) || classCode?.[1] || '',
+      group: group_(row[c.group]) || classCode?.[2].toUpperCase() || '', number: classCode ? '' : number };
     if (key === 'clinic') return [info];
     return statuses.flatMap(column => {
       const state = attendanceStatus_(row[column]);
@@ -530,6 +546,7 @@ function todayRecords_(key, source, date) {
         time: clean_(row[c.time]).match(/(?:^|\s)([012]?\d:[0-5]\d)(?::[0-5]\d)?(?:$|\s)/)?.[1] || '' }] : [];
     });
   });
+  return { records, current };
 }
 
 function attendanceStatus_(value) {
@@ -552,9 +569,9 @@ function live_(student, students, settings, force) {
   const lookup = key => {
     try {
       const source = settings.sources[key];
-      const cacheKey = 'attendance:' + date + ':' + digest_(JSON.stringify(source));
+      const cacheKey = 'attendance:v2:' + date + ':' + digest_(JSON.stringify(source));
       const value = key === 'attendance' && !force ? cache.get(cacheKey) : null;
-      const batch = value ? JSON.parse(value) : { at: now.toISOString(), records: todayRecords_(key, source, date) };
+      const batch = value ? JSON.parse(value) : { at: now.toISOString(), ...todayRecords_(key, source, date) };
       if (key === 'attendance' && !value) {
         const payload = JSON.stringify(batch);
         if (Utilities.newBlob(payload).getBytes().length < 95000) cache.put(cacheKey, payload, CACHE_SECONDS);
@@ -563,7 +580,7 @@ function live_(student, students, settings, force) {
       const eligible = candidates.filter(record => students.filter(item => matches(item, record)).length === 1);
       return { at: batch.at, ambiguous: eligible.length !== candidates.length,
         ...(key === 'attendance' ? { events: eligible.map(({ state, period, time }) => ({ state, period, time })) }
-          : { visited: eligible.length > 0 }) };
+          : { visited: eligible.length > 0, current: batch.current }) };
     } catch (error) {
       const reason = /^[A-Z][A-Z0-9_]{1,70}$/.test(error.message) ? error.message : 'SOURCE_READ_FAILED';
       return { error: reason };

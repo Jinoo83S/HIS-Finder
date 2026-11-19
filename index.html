@@ -40,7 +40,12 @@
           <button type="button" id="refresh" data-text="refresh"></button>
         </div>
         <div id="live" class="live" aria-live="polite"></div>
-        <div class="grid-wrap"><table id="timetable"></table></div>
+        <section class="schedule-view" aria-labelledby="schedule-heading">
+          <h3 id="schedule-heading" data-text="weeklyTimetable"></h3>
+          <div id="day-controls" class="day-controls" role="group" aria-labelledby="schedule-heading"></div>
+          <ol id="day-schedule" class="day-schedule" aria-live="off"></ol>
+          <table id="timetable"></table>
+        </section>
       </section>
     </section>
     <dialog id="settings">

@@ -2,6 +2,8 @@ import { apiUrl } from './config.js';
 
 const copy = {
   ko: {
+    weeklyTimetable: '시간표', shortDays: ['월', '화', '수', '목', '금'],
+    inClinic: '현재 입실 중', notInClinic: '현재 입실 기록 없음', noLessons: '표시할 교시가 없습니다.',
     previewPublic: '공개 시간표 미리보기', publishPublic: 'GitHub에 공개', published: '공개 시간표를 GitHub에 올렸습니다.',
     publicScope: '아래 학년·반·요일·교시·과목·교실이 GitHub Pages에 공개됩니다.',
     rules: 'his-main의 HIS Finder 전용 Firestore 규칙을 확인해 주세요.',
@@ -29,6 +31,8 @@ const copy = {
     days: ['월요일','화요일','수요일','목요일','금요일']
   },
   en: {
+    weeklyTimetable: 'Timetable', shortDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+    inClinic: 'Currently in the health office', notInClinic: 'No current entry', noLessons: 'No periods to display.',
     previewPublic: 'Preview public timetable', publishPublic: 'Publish to GitHub', published: 'Public timetable published to GitHub.',
     publicScope: 'The grades, classes, days, periods, courses and rooms below will be public on GitHub Pages.',
     rules: 'Check the HIS Finder Firestore rules in his-main.',
@@ -64,6 +68,7 @@ const slotKeys = ['HR','1','2','3','4','5','6','7','Lunch'];
 let language = localStorage.getItem('his-finder-language') === 'en' ? 'en' : 'ko';
 let firebaseAuth, authSdk, session, selected, details, latestSettings;
 let db, firestore, publicPreview;
+let displayedDay;
 let publicSlots = new Map();
 let matches = [];
 let generation = 0;
@@ -178,6 +183,8 @@ function renderTimetable() {
       .sort((a, b) => a.time.localeCompare(b.time));
     return { key, date: day, slots, today: now.weekday === index };
   });
+  const dayIndex = displayedDay ?? Math.max(now.weekday, 0);
+  drawDaySchedule(days, dayIndex, now.time);
   const tables = [node('thead'), node('tbody')];
   const heading = node('tr');
   days.forEach((day, index) => {
@@ -218,6 +225,50 @@ function renderTimetable() {
   byId('timetable').replaceChildren(...tables);
 }
 
+function drawDaySchedule(days, dayIndex, nowTime) {
+  const controls = byId('day-controls');
+  const hasFocus = controls.contains(document.activeElement);
+  controls.replaceChildren(...days.map((day, index) => {
+    const button = node('button', null, day.today ? 'day-today' : '');
+    button.type = 'button';
+    button.setAttribute('aria-pressed', String(index === dayIndex));
+    button.setAttribute('aria-label', t('days')[index] + ' ' + day.date.slice(5));
+    if (day.today) button.setAttribute('aria-current', 'date');
+    button.append(node('strong', t('shortDays')[index]), node('small', day.date.slice(8)));
+    button.addEventListener('click', () => {
+      displayedDay = index;
+      drawDaySchedule(days, index, nowTime);
+    });
+    return button;
+  }));
+  if (hasFocus) controls.children[dayIndex]?.focus({ preventScroll: true });
+  const day = days[dayIndex];
+  const rows = day.slots.map(({ time, slot }) => {
+    const [start, end] = time.split('-');
+    const active = day.today && start <= nowTime && nowTime < end;
+    const row = node('li', null, active ? 'day-row current' : 'day-row');
+    if (active) row.setAttribute('aria-current', 'time');
+    const when = node('div', null, 'day-when');
+    const slotLabel = /^\d$/.test(slot) && language === 'ko' ? slot + t('period') : label(slot);
+    when.append(node('strong', slotLabel), node('small', time.replace('-', '–')));
+    const item = details.lessons[day.key + ':' + slot];
+    const subject = node('div', null, 'day-subject');
+    if (item?.unresolved) subject.append(node('span', t('unresolved'), 'warn'));
+    else if (item) {
+      subject.append(node('strong', (publicSlots.get(item.publicKey) || item)[language]));
+      if (item.teacher) subject.append(node('small', item.teacher));
+    }
+    if (day.today) for (const event of details.attendance?.events || []) {
+      if (event.period === slot) subject.append(node('small', t(event.state), 'warn'));
+    }
+    row.append(when, subject);
+    const room = item && (publicSlots.get(item.publicKey) || item).room;
+    if (room) row.append(node('span', room, 'room day-room'));
+    return row;
+  });
+  byId('day-schedule').replaceChildren(...(rows.length ? rows : [node('li', t('noLessons'), 'secondary')]));
+}
+
 function displayTime(iso) {
   return new Intl.DateTimeFormat(language === 'ko' ? 'ko-KR' : 'en-GB', {
     dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Seoul'
@@ -230,13 +281,14 @@ function renderStudent() {
   byId('term').textContent = t('term') + ' ' + details.term + ' · ' + t('syncDate') + ' ' + displayTime(details.snapshotAt);
   const panels = ['attendance', 'clinic'].map(type => {
     const status = details[type];
-    const panel = node('div');
+    const panel = node('div', null, status?.error ? 'live-card live-error' : 'live-card');
     panel.append(node('strong', t(type)));
     if (!status) panel.append(node('span', t('loading')));
     else if (status.error) panel.append(node('span', errorText(new Error(status.error)), 'warn'));
     else {
       const events = status.events?.map(item => [t(item.state), item.period && label(item.period), item.time].filter(Boolean).join(' · '));
-      const summary = type === 'clinic' ? t(status.visited ? 'visit' : status.ambiguous ? 'ambiguous' : 'noVisit')
+      const summary = type === 'clinic' ? t(status.visited ? (status.current ? 'inClinic' : 'visit') :
+        status.ambiguous ? 'ambiguous' : (status.current ? 'notInClinic' : 'noVisit'))
         : events.length ? events.join(' / ') : t(status.ambiguous ? 'ambiguous' : 'noEvents');
       panel.append(node('span', summary));
       if (status.ambiguous && (status.visited || events?.length)) panel.append(node('small', t('ambiguous'), 'warn'));
